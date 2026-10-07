@@ -7,24 +7,26 @@ import (
 	"time"
 
 	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/rules"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/twin"
 )
 
-
 type TelemetryWorkerPool struct {
-	numWorkers int
-	jobQueue   chan *pb.VehicleTelemetry
-	workerWg   sync.WaitGroup
+	numWorkers   int
+	jobQueue     chan *pb.VehicleTelemetry
+	workerWg     sync.WaitGroup
 	twinRegistry *twin.DigitalTwinRegistry
+	rulesEngine  *rules.RulesEngine
 }
 
 // Essentially a python __init__ function to create a telemetry worker pool
-func NewTelemetryWorkerPool(numWorkers int, queueCapacity int, twinRegistry *twin.DigitalTwinRegistry) *TelemetryWorkerPool {
+func NewTelemetryWorkerPool(numWorkers int, queueCapacity int, twinRegistry *twin.DigitalTwinRegistry, rulesEngine *rules.RulesEngine) *TelemetryWorkerPool {
 	return &TelemetryWorkerPool{
 		numWorkers: numWorkers,
 		jobQueue:   make(chan *pb.VehicleTelemetry, queueCapacity),
 		//All numWorkers worker goroutines are actively listening to that single shared jobQueue channel
 		twinRegistry: twinRegistry,
+		rulesEngine:  rulesEngine,
 	}
 }
 
@@ -32,7 +34,7 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 	defer p.workerWg.Done()
 
 	for t := range p.jobQueue {
-		// Clean up Model Name 
+		// Clean up Model Name
 		modelName := strings.TrimPrefix(t.GetModel().String(), "VEHICLE_MODEL_TESLA_")
 		modelName = strings.TrimPrefix(modelName, "VEHICLE_MODEL_RIVIAN_")
 		modelName = strings.TrimPrefix(modelName, "VEHICLE_MODEL_")
@@ -52,7 +54,7 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 		if t.GetChargingState() != nil && t.GetChargingState().GetState() == pb.ChargingState_CHARGE_STATE_CHARGING {
 			statusIcon = "⚡"
 			details = fmt.Sprintf("🔌 Charging (+%.1f kW)", t.GetChargingState().GetChargingPowerKw())
-				} else if t.GetTruckState() != nil && t.GetTruckState().GetTowModeActive() {
+		} else if t.GetTruckState() != nil && t.GetTruckState().GetTowModeActive() {
 			statusIcon = "🚚"
 			details = fmt.Sprintf("📦 Towing (%.0f kg)", t.GetTruckState().GetEstimatedTrailerWeightKg())
 		} else if t.GetTruckState().GetTailgateOpen() {
@@ -63,7 +65,6 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 			details = "⛰️ Trail Crawling"
 		}
 
-
 		// Alert Flagging
 		if len(t.GetActiveAlertCodes()) > 0 {
 			statusIcon = "⚠️ "
@@ -73,6 +74,14 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 		// Update live in-memory digital twin
 		if p.twinRegistry != nil {
 			p.twinRegistry.Update(t)
+		}
+
+		// Evaluate physical safety & anomaly rules
+		if p.rulesEngine != nil {
+			alerts := p.rulesEngine.Evaluate(t)
+			for _, alert := range alerts {
+				fmt.Printf("🚨 [%s ALERT] %s: %s\n", alert.GetLevel().String(), alert.GetCode(), alert.GetDescription())
+			}
 		}
 
 		// Live Mission Control Print
@@ -92,7 +101,6 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
-
 
 func (p *TelemetryWorkerPool) Start() {
 	fmt.Printf("Starting %d workers...\n", p.numWorkers)
@@ -115,6 +123,6 @@ func (p *TelemetryWorkerPool) Enqueue(telemetry *pb.VehicleTelemetry) bool {
 		return true //Message successfully enqueued
 	default: //If the job queue is full, the default case is executed
 		fmt.Printf("Queue full! Dropping message for VIN: %s\n", telemetry.GetVin()) //Print that the message was dropped
-		return false //Message dropped
+		return false                                                                 //Message dropped
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/itsnairr/fleet-telemetry-engine/internal/worker"
 	"google.golang.org/protobuf/proto"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/twin"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/rules"
 )
 
 func handleConnection(conn net.Conn, pool *worker.TelemetryWorkerPool, registry *session.SessionRegistry) {
@@ -76,9 +77,11 @@ func main() {
 
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	twinRegistry := twin.NewDigitalTwinRegistry()
-	pool := worker.NewTelemetryWorkerPool(10, 100, twinRegistry)
+	twinRegistry := twin.NewDigitalTwinRegistry() //Twin Init to connect both the sim and the car OS
+	rulesEngine := rules.NewRulesEngine() 
+	pool := worker.NewTelemetryWorkerPool(10, 100, twinRegistry, rulesEngine)
 	pool.Start()
+
 
 	sessionRegistry := session.NewSessionRegistry()
 
