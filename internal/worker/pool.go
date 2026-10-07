@@ -7,6 +7,7 @@ import (
 	"time"
 
 	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/twin"
 )
 
 
@@ -14,14 +15,16 @@ type TelemetryWorkerPool struct {
 	numWorkers int
 	jobQueue   chan *pb.VehicleTelemetry
 	workerWg   sync.WaitGroup
+	twinRegistry *twin.DigitalTwinRegistry
 }
 
 // Essentially a python __init__ function to create a telemetry worker pool
-func NewTelemetryWorkerPool(numWorkers int, queueCapacity int) *TelemetryWorkerPool {
+func NewTelemetryWorkerPool(numWorkers int, queueCapacity int, twinRegistry *twin.DigitalTwinRegistry) *TelemetryWorkerPool {
 	return &TelemetryWorkerPool{
 		numWorkers: numWorkers,
 		jobQueue:   make(chan *pb.VehicleTelemetry, queueCapacity),
 		//All numWorkers worker goroutines are actively listening to that single shared jobQueue channel
+		twinRegistry: twinRegistry,
 	}
 }
 
@@ -65,6 +68,11 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 		if len(t.GetActiveAlertCodes()) > 0 {
 			statusIcon = "⚠️ "
 			details += fmt.Sprintf(" 🚨 %v", t.GetActiveAlertCodes())
+		}
+
+		// Update live in-memory digital twin
+		if p.twinRegistry != nil {
+			p.twinRegistry.Update(t)
 		}
 
 		// Live Mission Control Print

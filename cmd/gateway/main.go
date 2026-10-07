@@ -14,6 +14,7 @@ import (
 	"github.com/itsnairr/fleet-telemetry-engine/internal/session"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/worker"
 	"google.golang.org/protobuf/proto"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/twin"
 )
 
 func handleConnection(conn net.Conn, pool *worker.TelemetryWorkerPool, registry *session.SessionRegistry) {
@@ -75,7 +76,8 @@ func main() {
 
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	pool := worker.NewTelemetryWorkerPool(10, 100) //10 Workers with a shared queue of 100
+	twinRegistry := twin.NewDigitalTwinRegistry()
+	pool := worker.NewTelemetryWorkerPool(10, 100, twinRegistry)
 	pool.Start()
 
 	sessionRegistry := session.NewSessionRegistry()
