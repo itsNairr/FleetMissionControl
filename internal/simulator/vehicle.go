@@ -1,9 +1,11 @@
 package simulator
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"time"
+	"errors"
 
 	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
 )
@@ -25,6 +27,22 @@ const (
 	ScenarioThermalHazard       Scenario = "THERMAL_HAZARD"
 	ScenarioTirePuncture        Scenario = "TIRE_PUNCTURE"
 	ScenarioLowBatteryTurtle    Scenario = "TURTLE_MODE"
+)
+
+type VehicleCommand string
+
+const (
+	CommandUnlockDoors   VehicleCommand = "UNLOCK_DOORS"
+	CommandLockDoors     VehicleCommand = "LOCK_DOORS"
+	CommandOpenFrunk     VehicleCommand = "OPEN_FRUNK"
+	CommandCloseFrunk    VehicleCommand = "CLOSE_FRUNK"
+	CommandOpenTailgate  VehicleCommand = "OPEN_TAILGATE"
+	CommandCloseTailgate VehicleCommand = "CLOSE_TAILGATE"
+)
+
+var (
+	ErrFrunkHazardInMotion    = errors.New("ISO-26262: cannot unlatch frunk while vehicle is in motion")
+	ErrTailgateHazardInMotion = errors.New("ISO-26262: cannot open tailgate while vehicle is in motion")
 )
 
 // California geographical clusters for fleet routing
@@ -299,6 +317,8 @@ func (v *SimulatedVehicle) Tick() {
 		v.BatterySoC -= 0.0002 // Phantom standby drain
 	}
 
+	v.UpdateLifecycle()
+
 	// Clamp Battery SoC between 0% and 100%
 	if v.BatterySoC < 0 {
 		v.BatterySoC = 0
@@ -434,4 +454,81 @@ func (v *SimulatedVehicle) ToTelemetry() *pb.VehicleTelemetry {
 	}
 
 	return telemetry
+}
+
+// UpdateLifecycle evaluates autonomous state transitions based on battery SoC and vehicle physics.
+func (v *SimulatedVehicle) UpdateLifecycle() {
+	switch v.Scenario {
+	case ScenarioHighwayCruising, ScenarioHeavyTowing, ScenarioUrbanCommute:
+		// 1. Critical battery depletion -> Turtle Mode
+		if v.BatterySoC <= 5.0 {
+			fmt.Printf("[%s] 🐢 Critical battery (%.1f%%). Inverter throttling power to TURTLE_MODE\n", v.Vin, v.BatterySoC)
+			v.Scenario = ScenarioLowBatteryTurtle
+			v.CurrentSpeed = 25.0
+			return
+		}
+
+		// 2. Low battery reserve -> Pull into Supercharger stall
+		if v.BatterySoC <= 15.0 {
+			fmt.Printf("[%s] ⚡ Battery reserve low (%.1f%%). Auto-navigating into SUPERCHARGING stall\n", v.Vin, v.BatterySoC)
+			v.Scenario = ScenarioSupercharging
+			v.CurrentSpeed = 0.0
+			return
+		}
+
+	case ScenarioSupercharging:
+		// 3. Fast charge taper knee reached -> Resume highway journey
+		if v.BatterySoC >= 80.0 {
+			fmt.Printf("[%s] 🔋 DC Fast Charge reached 80.0%% knee (%.1f%%). Unplugging and resuming HIGHWAY_CRUISING\n", v.Vin, v.BatterySoC)
+			v.Scenario = ScenarioHighwayCruising
+			v.CurrentSpeed = 110.0
+			return
+		}
+
+	case ScenarioLowBatteryTurtle:
+		// If emergency charging occurs or SoC drops to 0
+		if v.BatterySoC <= 0.0 {
+			v.CurrentSpeed = 0.0
+		}
+	}
+}
+
+// ExecuteCommand validates safety interlocks against real-time physical dynamics before applying state changes.
+func (v *SimulatedVehicle) ExecuteCommand(cmd VehicleCommand) error {
+	switch cmd {
+	case CommandOpenFrunk:
+		// ISO-26262 interlock check
+		if v.CurrentSpeed > 0 {
+			return ErrFrunkHazardInMotion
+		}
+		v.FrunkOpen = true
+		return nil
+
+	case CommandCloseFrunk:
+		v.FrunkOpen = false
+		return nil
+
+	case CommandOpenTailgate:
+		// Interlock check
+		if v.CurrentSpeed > 0 {
+			return ErrTailgateHazardInMotion
+		}
+		v.TailgateOpen = true
+		return nil
+
+	case CommandCloseTailgate:
+		v.TailgateOpen = false
+		return nil
+
+	case CommandLockDoors:
+		v.IsLocked = true
+		return nil
+
+	case CommandUnlockDoors:
+		v.IsLocked = false
+		return nil
+
+	default:
+		return fmt.Errorf("unknown vehicle command: %s", cmd)
+	}
 }
