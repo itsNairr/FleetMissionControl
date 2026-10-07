@@ -51,7 +51,7 @@ var CaliforniaRegions = []CaliforniaRegion{
 	{Name: "Central Coast (Hwy 101)", MinLat: 34.40, MaxLat: 36.65, MinLon: -121.85, MaxLon: -119.75},
 }
 
-// RandomCaliforniaLocation picks a coordinate strictly bounded within California based on scenario
+
 func RandomCaliforniaLocation(scenario Scenario) (lat, lon, heading float64) {
 	var region CaliforniaRegion
 	switch scenario {
