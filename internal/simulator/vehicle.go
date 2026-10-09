@@ -6,8 +6,10 @@ import (
 	"math/rand"
 	"time"
 	"errors"
+	"crypto/ecdsa"
 
 	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
+	crypto "github.com/itsnairr/fleet-telemetry-engine/internal/crypto"
 )
 
 type Scenario string
@@ -200,6 +202,7 @@ type SimulatedVehicle struct {
 	IsLocked     bool
 	FrunkOpen    bool
 	TailgateOpen bool
+	TrunkOpen bool
 }
 
 // Creates the simulated car and returns the address
@@ -400,6 +403,7 @@ func (v *SimulatedVehicle) ToTelemetry() *pb.VehicleTelemetry {
 		ClimateOn:          true,
 		IsLocked:           v.IsLocked,
 		FrunkOpen:          v.FrunkOpen,
+		TrunkOrLiftgateOpen:  v.TrunkOpen || v.TailgateOpen,
 		DriverDoorOpen:     false,
 	}
 
@@ -530,5 +534,71 @@ func (v *SimulatedVehicle) ExecuteCommand(cmd VehicleCommand) error {
 
 	default:
 		return fmt.Errorf("unknown vehicle command: %s", cmd)
+	}
+}
+
+// ExecuteProtoCommand verifies the ECDSA signature with pubKey, checks ISO-26262 safety interlocks,
+// and applies the physical state transition to the vehicle.
+func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *ecdsa.PublicKey) error {
+	// Gate 1: Cryptographic Authorization Check
+	valid, reason := crypto.VerifyCommand(pubKey, cmd, 5*time.Second)
+	if !valid {
+		return fmt.Errorf("security rejection for %s: %s", v.Vin, reason)
+	}
+
+	// Gate 2: ISO-26262 Functional Safety Interlocks & Execution
+	switch cmd.GetType() {
+	case pb.CommandType_COMMAND_TYPE_UNLOCK_DOORS:
+		v.IsLocked = false
+		fmt.Printf("[%s] 🔓 Doors UNLOCKED by cloud command\n", v.Vin)
+		return nil
+
+	case pb.CommandType_COMMAND_TYPE_LOCK_DOORS:
+		v.IsLocked = true
+		fmt.Printf("[%s] 🔒 Doors LOCKED by cloud command\n", v.Vin)
+		return nil
+
+	case pb.CommandType_COMMAND_TYPE_OPEN_FRUNK:
+		if v.CurrentSpeed > 0 {
+			return ErrFrunkHazardInMotion
+		}
+		v.FrunkOpen = true
+		fmt.Printf("[%s] 📦 Frunk OPENED by cloud command\n", v.Vin)
+		return nil
+
+	case pb.CommandType_COMMAND_TYPE_CLOSE_FRUNK:
+		v.FrunkOpen = false
+		fmt.Printf("[%s] 📦 Frunk CLOSED by cloud command\n", v.Vin)
+		return nil
+
+	case pb.CommandType_COMMAND_TYPE_OPEN_TRUNK:
+		if v.CurrentSpeed > 0 {
+			return ErrTailgateHazardInMotion
+		}
+		v.TrunkOpen = true
+		v.TailgateOpen = true
+		fmt.Printf("[%s] 🚙 Trunk/Tailgate OPENED by cloud command\n", v.Vin)
+		return nil
+
+	case pb.CommandType_COMMAND_TYPE_CLOSE_TRUNK:
+		v.TrunkOpen = false
+		v.TailgateOpen = false
+		fmt.Printf("[%s] 🚙 Trunk/Tailgate CLOSED by cloud command\n", v.Vin)
+		return nil
+
+	case pb.CommandType_COMMAND_TYPE_SET_SPEED_LIMIT:
+		limit := float32(cmd.GetSpeedLimitMph()) * 1.60934 // Convert mph to km/h
+		if limit > 0 && v.CurrentSpeed > limit {
+			v.CurrentSpeed = limit
+		}
+		fmt.Printf("[%s] ⚡ Speed limit governor set to %.1f mph\n", v.Vin, cmd.GetSpeedLimitMph())
+		return nil
+
+	case pb.CommandType_COMMAND_TYPE_REBOOT_COMPUTER:
+		fmt.Printf("[%s] 🔄 Infotainment/Telematics ECU rebooting...\n", v.Vin)
+		return nil
+
+	default:
+		return fmt.Errorf("unrecognized command type: %v", cmd.GetType())
 	}
 }
