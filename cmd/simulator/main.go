@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -13,10 +15,12 @@ import (
 	"syscall"
 	"time"
 
-	"google.golang.org/protobuf/proto"
-
+	"github.com/itsnairr/fleet-telemetry-engine/internal/crypto"
+	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/simulator"
+	"google.golang.org/protobuf/proto"
 )
+
 
 func main() {
 	numVehiclesFlag := flag.Int("n", 1, "Number of fleet vehicles to simulate")           //-n
@@ -28,7 +32,19 @@ func main() {
 		if parsed, err := strconv.Atoi(flag.Arg(0)); err == nil && parsed > 0 {
 			count = parsed
 		}
+	}	
+	
+	// Load fleet public key burned into simulated vehicle ECU
+	pubKey, err := crypto.LoadPublicKeyPEM("certs/fleet_public.pem")
+	if err != nil {
+		fmt.Printf("⚠️ Warning: Could not load certs/fleet_public.pem: %v\n", err)
+		fmt.Println("Please run the Gateway first so it generates the fleet keys!")
+		return
 	}
+	fmt.Println("🔑 Loaded fleet ECDSA public key. Ready to verify cloud commands.\n")
+
+
+
 
 	fmt.Printf("🚗 Initializing EV Fleet Simulator: %d vehicles\n", count)
 	fmt.Printf("📍 Telemetry Distribution: California Roads & Metros\n")
@@ -52,7 +68,7 @@ func main() {
 
 		// Subtle 5ms stagger to avoid TCP thundering herd on gateway connection accept
 		time.Sleep(5 * time.Millisecond)
-		go simulateVehicle(ctx, vehicle, *serverAddrFlag, &wg)
+		go simulateVehicle(ctx, vehicle, *serverAddrFlag, &wg, pubKey)
 	}
 
 	<-ctx.Done()
@@ -62,7 +78,7 @@ func main() {
 
 }
 
-func simulateVehicle(ctx context.Context, v *simulator.SimulatedVehicle, serverAddr string, wg *sync.WaitGroup) {
+func simulateVehicle(ctx context.Context, v *simulator.SimulatedVehicle, serverAddr string, wg *sync.WaitGroup, pubKey *ecdsa.PublicKey) {
 	defer wg.Done()
 
 	backoff := 1 * time.Second
@@ -96,8 +112,16 @@ func simulateVehicle(ctx context.Context, v *simulator.SimulatedVehicle, serverA
 		backoff = 1 * time.Second
 		fmt.Printf("[%s] 📶 Connected to gateway\n", v.Vin)
 
+		// Create a per-connection cancelable context:
+		// If either the reader or writer socket breaks, both exit cleanly so the outer loop can reconnect.
+		connCtx, cancelConn := context.WithCancel(ctx)
+		go func() {
+			listenForCommands(connCtx, conn, v, pubKey)
+			cancelConn() // If socket reads fail/disconnect, cancel connection
+		}()
+
 		// Stream telemetry until socket breaks or Ctrl+C is pressed
-		streamTelemetry(ctx, conn, v)
+		streamTelemetry(connCtx, conn, v)
 		conn.Close()
 	}
 }
@@ -135,6 +159,42 @@ func streamTelemetry(ctx context.Context, conn net.Conn, v *simulator.SimulatedV
 			if _, err := conn.Write(data); err != nil {
 				return
 			}
+		}
+	}
+}
+
+// listenForCommands reads length-prefixed Protobuf commands from the Gateway and dispatches to the vehicle ECU
+func listenForCommands(ctx context.Context, conn net.Conn, v *simulator.SimulatedVehicle, pubKey *ecdsa.PublicKey) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// 1. Read 4-byte length prefix
+		header := make([]byte, 4)
+		if _, err := io.ReadFull(conn, header); err != nil {
+			return // Socket closed or EOF
+		}
+		msgLen := binary.BigEndian.Uint32(header)
+
+		// 2. Read Protobuf payload
+		payload := make([]byte, msgLen)
+		if _, err := io.ReadFull(conn, payload); err != nil {
+			return
+		}
+
+		// 3. Unmarshal Protobuf command
+		cmd := &pb.VehicleCommand{}
+		if err := proto.Unmarshal(payload, cmd); err != nil {
+			fmt.Printf("[%s] Malformed command protobuf: %v\n", v.Vin, err)
+			continue
+		}
+
+		// 4. Verify signature, check replay window, enforce ISO-26262 safety interlocks & execute!
+		if err := v.ExecuteProtoCommand(cmd, pubKey); err != nil {
+			fmt.Printf("[%s] ❌ Command rejected: %v\n", v.Vin, err)
 		}
 	}
 }

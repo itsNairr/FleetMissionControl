@@ -7,6 +7,11 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"time"
+	"os"
+	"encoding/pem"
+	"crypto/x509"
+	"path/filepath"
+	"errors"
 
 	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
 )
@@ -73,4 +78,101 @@ func VerifyCommand(pubKey *ecdsa.PublicKey, cmd *pb.VehicleCommand, maxAge time.
 	}
 
 	return true, ""
+}
+
+// SavePrivateKeyPEM writes an ECDSA private key to disk in PEM format (0600 permissions)
+func SavePrivateKeyPEM(filePath string, privKey *ecdsa.PrivateKey) error {
+	der, err := x509.MarshalECPrivateKey(privKey)
+	if err != nil {
+		return fmt.Errorf("failed to marshal private key: %w", err)
+	}
+	block := &pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: der,
+	}
+	return os.WriteFile(filePath, pem.EncodeToMemory(block), 0600)
+}
+
+// SavePublicKeyPEM writes an ECDSA public key to disk in PEM format (0644 permissions)
+func SavePublicKeyPEM(filePath string, pubKey *ecdsa.PublicKey) error {
+	der, err := x509.MarshalPKIXPublicKey(pubKey)
+	if err != nil {
+		return fmt.Errorf("failed to marshal public key: %w", err)
+	}
+	block := &pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: der,
+	}
+	return os.WriteFile(filePath, pem.EncodeToMemory(block), 0644)
+}
+
+// LoadPrivateKeyPEM reads and decodes an ECDSA private key from a PEM file
+func LoadPrivateKeyPEM(filePath string) (*ecdsa.PrivateKey, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "EC PRIVATE KEY" {
+		return nil, fmt.Errorf("invalid private key PEM data in %s", filePath)
+	}
+	return x509.ParseECPrivateKey(block.Bytes)
+}
+
+// LoadPublicKeyPEM reads and decodes an ECDSA public key from a PEM file
+func LoadPublicKeyPEM(filePath string) (*ecdsa.PublicKey, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(data)
+	if block == nil || block.Type != "PUBLIC KEY" {
+		return nil, fmt.Errorf("invalid public key PEM data in %s", filePath)
+	}
+	parsedKey, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse public key: %w", err)
+	}
+	pubKey, ok := parsedKey.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, errors.New("key is not an ECDSA public key")
+	}
+	return pubKey, nil
+}
+
+// EnsureFleetKeys loads the fleet keypair from certsDir, or generates and saves them if they don't exist
+func EnsureFleetKeys(certsDir string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, error) {
+	privPath := filepath.Join(certsDir, "fleet_private.pem")
+	pubPath := filepath.Join(certsDir, "fleet_public.pem")
+
+	// If both files exist, load them
+	if _, err := os.Stat(privPath); err == nil {
+		priv, err := LoadPrivateKeyPEM(privPath)
+		if err == nil {
+			pub, err := LoadPublicKeyPEM(pubPath)
+			if err == nil {
+				return priv, pub, nil
+			}
+		}
+	}
+
+	// Otherwise create directory and generate fresh keypair
+	if err := os.MkdirAll(certsDir, 0755); err != nil {
+		return nil, nil, err
+	}
+
+	priv, pub, err := GenerateKeyPair()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if err := SavePrivateKeyPEM(privPath, priv); err != nil {
+		return nil, nil, err
+	}
+	if err := SavePublicKeyPEM(pubPath, pub); err != nil {
+		return nil, nil, err
+	}
+
+	fmt.Printf("🔑 Generated fresh fleet ECDSA keypair in %s\n", certsDir)
+	return priv, pub, nil
 }

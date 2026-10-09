@@ -16,6 +16,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/twin"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/rules"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/command"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/crypto"
 )
 
 func handleConnection(conn net.Conn, pool *worker.TelemetryWorkerPool, registry *session.SessionRegistry) {
@@ -84,6 +86,19 @@ func main() {
 
 
 	sessionRegistry := session.NewSessionRegistry()
+
+
+	//Initialize Root of Trust / Fleet ECDSA Keypair
+	privKey, _, err := crypto.EnsureFleetKeys("certs")
+	if err != nil {
+		fmt.Printf("Fatal: failed to initialize fleet crypto keys: %v\n", err)
+		return
+	}
+
+	//Initialize Command Dispatcher with Gateway Private Key & Session Registry
+	dispatcher := command.NewCommandDispatcher(privKey, sessionRegistry)
+	_ = dispatcher
+
 
 	//Setup TCP connection
 	listener, err := net.Listen("tcp", ":8080")
