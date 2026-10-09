@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package fleet.command.v1;
+
+option go_package = "github.com/itsnairr/fleet-telemetry-engine/internal/protocol";
+
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_UNLOCK_DOORS = 1;
+  COMMAND_TYPE_LOCK_DOORS = 2;
+  COMMAND_TYPE_OPEN_FRUNK = 3;
+  COMMAND_TYPE_CLOSE_FRUNK = 4;
+  COMMAND_TYPE_OPEN_TRUNK = 5;
+  COMMAND_TYPE_CLOSE_TRUNK = 6;
+  COMMAND_TYPE_SET_SPEED_LIMIT = 7;
+  COMMAND_TYPE_REBOOT_COMPUTER = 8;
+}
+
+message VehicleCommand {
+  string command_id = 1;      // Unique UUID for tracing
+  string vin = 2;             // Target vehicle VIN
+  CommandType type = 3;       // Command enum action
+  double speed_limit_mph = 4; // Used when type is SET_SPEED_LIMIT
+  int64 timestamp_ms = 5;     // Epoch timestamp (for replay attack prevention)
+  int64 nonce = 6;            // Monotonic or cryptographic nonce
+  bytes signature = 7;        // ECDSA signature of payload bytes
+}
+
+message CommandResponse {
+  string command_id = 1;      // Corresponds to the dispatched command ID
+  string vin = 2;             // Responding vehicle
+  bool success = 3;           // Whether the command succeeded
+  string error_message = 4;   // Error details if rejected (e.g., safety interlock or invalid signature)
+  int64 timestamp_ms = 5;     // Execution acknowledgment timestamp
+}
