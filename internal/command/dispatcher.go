@@ -5,6 +5,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"sync"
@@ -21,6 +22,9 @@ type pendingCommand struct {
 	vin      string
 	response chan *pb.CommandResponse
 }
+
+// ErrVehicleOffline is returned when the target VIN has no live socket (check with errors.Is)
+var ErrVehicleOffline = errors.New("vehicle is offline (no active socket session)")
 
 // CommandDispatcher manages signing and transmitting authenticated commands to connected vehicles
 type CommandDispatcher struct {
@@ -143,7 +147,7 @@ func (d *CommandDispatcher) send(cmd *pb.VehicleCommand) error {
 	// Check if vehicle is currently connected
 	s, exists := d.sessions.Get(cmd.GetVin())
 	if !exists {
-		return fmt.Errorf("vehicle %s is offline (no active socket session)", cmd.GetVin())
+		return fmt.Errorf("vehicle %s: %w", cmd.GetVin(), ErrVehicleOffline)
 	}
 
 	// Single locked write of the whole frame, safe even if many requests target the same car at once

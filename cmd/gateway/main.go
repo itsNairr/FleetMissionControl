@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
+	"sync"
 	"syscall"
+	"time"
 
+	"github.com/itsnairr/fleet-telemetry-engine/internal/api"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/command"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/crypto"
 	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
@@ -27,9 +32,47 @@ type gateway struct {
 	sessions   *session.SessionRegistry
 	twins      *twin.DigitalTwinRegistry
 	dispatcher *command.CommandDispatcher
+
+	// Every open vehicle socket, so shutdown can close them and wait for their goroutines to exit
+	connMu   sync.Mutex
+	conns    map[net.Conn]struct{}
+	connsWg  sync.WaitGroup
+	shutdown bool // Set once closeAllConnections starts, late arrivals are turned away
+}
+
+// trackConnection registers a new socket. Returns false if the gateway is already shutting down.
+func (g *gateway) trackConnection(conn net.Conn) bool {
+	g.connMu.Lock()
+	defer g.connMu.Unlock()
+	if g.shutdown {
+		return false
+	}
+	g.conns[conn] = struct{}{}
+	g.connsWg.Add(1)
+	return true
+}
+
+func (g *gateway) untrackConnection(conn net.Conn) {
+	g.connMu.Lock()
+	defer g.connMu.Unlock()
+	delete(g.conns, conn)
+	g.connsWg.Done()
+}
+
+// closeAllConnections unblocks every handleConnection read loop and waits until they have all returned.
+// Must run before pool.Stop(), otherwise a handler could Enqueue onto the closed job queue and panic.
+func (g *gateway) closeAllConnections() {
+	g.connMu.Lock()
+	g.shutdown = true
+	for conn := range g.conns {
+		conn.Close()
+	}
+	g.connMu.Unlock()
+	g.connsWg.Wait()
 }
 
 func (g *gateway) handleConnection(conn net.Conn) {
+	defer g.untrackConnection(conn)
 	defer conn.Close()
 
 	var vin string
@@ -122,7 +165,20 @@ func main() {
 		sessions:   sessionRegistry,
 		twins:      twinRegistry,
 		dispatcher: dispatcher,
+		conns:      make(map[net.Conn]struct{}),
 	}
+
+	//HTTP + WebSocket API for the Mission Control dashboard
+	apiServer := api.NewServer(api.Config{
+		Addr:           envOr("FLEET_API_ADDR", "localhost:8081"),
+		AllowedOrigins: strings.Split(envOr("FLEET_ALLOWED_ORIGINS", "http://localhost:5173"), ","),
+	}, twinRegistry, dispatcher, alertBroker)
+
+	go func() {
+		if err := apiServer.ListenAndServe(); err != nil {
+			fmt.Printf("API server error: %v\n", err)
+		}
+	}()
 
 
 	//Setup TCP connection
@@ -132,7 +188,6 @@ func main() {
 		return
 	}
 
-	defer listener.Close() //Close at the end
 	fmt.Println("Gateway TCP server listening on :8080...")
 
 	go func() { //goroutine to not run on main thread
@@ -150,6 +205,10 @@ func main() {
 			}
 
 			// Handle this specific vehicle concurrently without blocking other cars
+			if !gw.trackConnection(conn) {
+				conn.Close() // Arrived mid-shutdown
+				continue
+			}
 			go gw.handleConnection(conn)
 		}
 	}()
@@ -160,7 +219,24 @@ func main() {
 	sig := <-sigChan //Main freezes until Ctrl+C
 	fmt.Printf("\nReceived signal: %s. Initiating graceful shutdown...\n", sig)
 
-	pool.Stop()
+	// Shut down from the outside in: dashboards first, then vehicles, then the workers they feed
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := apiServer.Shutdown(shutdownCtx); err != nil {
+		fmt.Printf("API shutdown error: %v\n", err)
+	}
+
+	listener.Close()           // Stop accepting new vehicles
+	gw.closeAllConnections()   // Disconnect existing ones and wait for their handlers to exit
+	pool.Stop()                // Now nothing can Enqueue, so draining the queue is safe
 
 	fmt.Println("Shutdown complete. Exiting cleanly.")
+}
+
+// envOr reads an environment variable, falling back to def when unset
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
