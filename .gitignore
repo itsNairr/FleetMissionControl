@@ -3,3 +3,8 @@ TASKS.md
 AGENTS.md
 agents.md
 tasks.md
+
+# Frontend
+web/node_modules/
+web/dist/
+web/*.tsbuildinfo

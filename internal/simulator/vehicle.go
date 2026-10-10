@@ -48,70 +48,16 @@ var (
 	ErrTailgateHazardInMotion = errors.New("ISO-26262: cannot open tailgate while vehicle is in motion")
 )
 
-// California geographical clusters for fleet routing
-type CaliforniaRegion struct {
-	Name   string
-	MinLat float64
-	MaxLat float64
-	MinLon float64
-	MaxLon float64
-}
-
-var CaliforniaRegions = []CaliforniaRegion{
-	// 1. San Francisco Bay Area & Silicon Valley (Tesla Fremont, Rivian Palo Alto)
-	{Name: "Bay Area / Silicon Valley", MinLat: 37.25, MaxLat: 37.95, MinLon: -122.50, MaxLon: -121.80},
-	// 2. Greater Los Angeles & Orange County (Urban commute, Rivian Irvine)
-	{Name: "Greater LA & Orange County", MinLat: 33.65, MaxLat: 34.25, MinLon: -118.45, MaxLon: -117.75},
-	// 3. San Diego Metro & Coastal Corridor
-	{Name: "San Diego Metro", MinLat: 32.65, MaxLat: 33.15, MinLon: -117.28, MaxLon: -116.95},
-	// 4. Central Valley / I-5 Corridor (Bakersfield, Fresno, Modesto, Sacramento)
-	{Name: "Central Valley (I-5 / CA-99)", MinLat: 35.35, MaxLat: 38.60, MinLon: -121.45, MaxLon: -119.70},
-	// 5. Sierra Nevada / Lake Tahoe (High altitude, snow, off-road)
-	{Name: "Sierra Nevada / Lake Tahoe", MinLat: 38.90, MaxLat: 39.30, MinLon: -120.25, MaxLon: -119.90},
-	// 6. Central Coast / Hwy 101 (Monterey, San Luis Obispo, Santa Barbara)
-	{Name: "Central Coast (Hwy 101)", MinLat: 34.40, MaxLat: 36.65, MinLon: -121.85, MaxLon: -119.75},
-}
-
-
-func RandomCaliforniaLocation(scenario Scenario) (lat, lon, heading float64) {
-	var region CaliforniaRegion
+// routeKindFor maps a scenario to the kind of road it happens on
+func routeKindFor(scenario Scenario) RouteKind {
 	switch scenario {
+	case ScenarioHighwayCruising, ScenarioHeavyTowing, ScenarioSupercharging:
+		return RouteHighway // Freeway corridors (Superchargers sit along them)
 	case ScenarioWinterColdSoak, ScenarioOffRoadAdventure:
-		// Mountain trails & snow tests in the Sierra / Tahoe passes
-		region = CaliforniaRegions[4]
-	case ScenarioDeliveryStopCycle:
-		// Urban delivery in high-density metros
-		if rand.Float64() < 0.55 {
-			region = CaliforniaRegions[0] // Bay Area
-		} else {
-			region = CaliforniaRegions[1] // LA Metro
-		}
-	case ScenarioHighwayCruising, ScenarioHeavyTowing:
-		// Long-distance transport on I-5 or Hwy 101
-		if rand.Float64() < 0.65 {
-			region = CaliforniaRegions[3] // Central Valley I-5
-		} else {
-			region = CaliforniaRegions[5] // Central Coast Hwy 101
-		}
+		return RouteMountain // Sierra roads around Lake Tahoe
 	default:
-		// Distributed across California population centers
-		r := rand.Float64()
-		switch {
-		case r < 0.40:
-			region = CaliforniaRegions[0] // 40% Bay Area
-		case r < 0.75:
-			region = CaliforniaRegions[1] // 35% Greater LA
-		case r < 0.90:
-			region = CaliforniaRegions[2] // 15% San Diego
-		default:
-			region = CaliforniaRegions[3] // 10% Central Valley
-		}
+		return RouteUrban // Commutes, deliveries, parking, home/work charging
 	}
-
-	lat = region.MinLat + rand.Float64()*(region.MaxLat-region.MinLat)
-	lon = region.MinLon + rand.Float64()*(region.MaxLon-region.MinLon)
-	heading = rand.Float64() * 360.0
-	return
 }
 
 type ScenarioWeight struct {
@@ -198,12 +144,16 @@ type SimulatedVehicle struct {
 	OdometerKm   float32
 	Latitude     float64
 	Longitude    float64
-	HeadingDeg   float64 // 0.0 - 360.0 degrees
+	HeadingDeg   float64 // 0.0 - 360.0 degrees, compass bearing of travel
+	Route        *Route  // Road the vehicle drives on
+	RoutePosKm   float64 // Distance along Route
+	RouteDir     float64 // +1 forward along the polyline, -1 in reverse
 	TireFLBar    float32
 	TireFRBar    float32
 	TireRLBar    float32
 	TireRRBar    float32
 	Aux12VVolts  float32
+	PackTempC    float32
 	IsLocked     bool
 	FrunkOpen    bool
 	TailgateOpen bool
@@ -212,7 +162,12 @@ type SimulatedVehicle struct {
 
 // Creates the simulated car and returns the address
 func NewSimulatedVehicle(vin string, model pb.VehicleModel, scenario Scenario) *SimulatedVehicle {
-	lat, lon, heading := RandomCaliforniaLocation(scenario)
+	// Drop the vehicle at a random point on a road that suits its scenario, facing a random way
+	route := RandomRoute(routeKindFor(scenario))
+	dir := 1.0
+	if rand.Float64() < 0.5 {
+		dir = -1.0
+	}
 
 	v := &SimulatedVehicle{
 		Vin:          vin,
@@ -221,14 +176,15 @@ func NewSimulatedVehicle(vin string, model pb.VehicleModel, scenario Scenario) *
 		BatterySoC:   80.0,
 		CurrentSpeed: 0.0,
 		OdometerKm:   12450.0 + float32(rand.Intn(40000)),
-		Latitude:     lat,
-		Longitude:    lon,
-		HeadingDeg:   heading,
+		Route:        route,
+		RoutePosKm:   rand.Float64() * route.LengthKm,
+		RouteDir:     dir,
 		TireFLBar:    2.4, // Standard 35 PSI ~ 2.4 bar
 		TireFRBar:    2.4,
 		TireRLBar:    2.4,
 		TireRRBar:    2.4,
 		Aux12VVolts:  13.8,
+		PackTempC:    28.0,
 		IsLocked:     true,
 	}
 
@@ -262,7 +218,17 @@ func NewSimulatedVehicle(vin string, model pb.VehicleModel, scenario Scenario) *
 		v.Aux12VVolts = 10.8 // Dying low-voltage battery
 	}
 
+	v.syncPosition()
 	return v
+}
+
+// syncPosition derives GPS coordinates and heading from the vehicle's place on its route
+func (v *SimulatedVehicle) syncPosition() {
+	lat, lon, heading := v.Route.PositionAt(v.RoutePosKm)
+	if v.RouteDir < 0 {
+		heading = math.Mod(heading+180, 360) // Driving the polyline backwards
+	}
+	v.Latitude, v.Longitude, v.HeadingDeg = lat, lon, heading
 }
 
 // Tick advances the vehicle state by 1 second.
@@ -330,6 +296,18 @@ func (v *SimulatedVehicle) Tick() {
 
 	v.UpdateLifecycle()
 
+	// Pack thermals: drift toward a scenario-dependent equilibrium (1st-order lag)
+	targetTemp := float32(30.0)
+	switch v.Scenario {
+	case ScenarioThermalHazard:
+		targetTemp = 70.0 // Failing cooling loop: climbs past the 55°C runaway threshold in ~1 min
+	case ScenarioSupercharging, ScenarioHeavyTowing:
+		targetTemp = 42.0
+	case ScenarioWinterColdSoak:
+		targetTemp = 2.0
+	}
+	v.PackTempC += (targetTemp - v.PackTempC) * 0.03
+
 	// Clamp Battery SoC between 0% and 100%
 	if v.BatterySoC < 0 {
 		v.BatterySoC = 0
@@ -343,15 +321,17 @@ func (v *SimulatedVehicle) Tick() {
 		distKm := float64(v.CurrentSpeed) / 3600.0
 		v.OdometerKm += float32(distKm)
 
-		// Move along heading vector:
-		// 1 degree latitude ≈ 111.0 km
-		// 1 degree longitude ≈ 111.0 km * cos(latitude)
-		headingRad := v.HeadingDeg * math.Pi / 180.0
-		latDelta := (distKm / 111.0) * math.Cos(headingRad)
-		lonDelta := (distKm / (111.0 * math.Cos(v.Latitude*math.Pi/180.0))) * math.Sin(headingRad)
-
-		v.Latitude += latDelta
-		v.Longitude += lonDelta
+		// Follow the road: advance along the route polyline, then derive GPS + heading from it
+		v.RoutePosKm += v.RouteDir * distKm
+		switch {
+		case v.Route.Loop:
+			v.RoutePosKm = math.Mod(v.RoutePosKm+v.Route.LengthKm, v.Route.LengthKm) // Circulate
+		case v.RoutePosKm >= v.Route.LengthKm:
+			v.RoutePosKm, v.RouteDir = v.Route.LengthKm, -1 // End of the corridor: turn around
+		case v.RoutePosKm <= 0:
+			v.RoutePosKm, v.RouteDir = 0, 1
+		}
+		v.syncPosition()
 	}
 }
 
@@ -405,6 +385,9 @@ func (v *SimulatedVehicle) ToTelemetry() *pb.VehicleTelemetry {
 		LowVoltageBatteryVolts: v.Aux12VVolts,
 		MinCellVoltage:          3.82,
 		MaxCellVoltage:          3.85,
+		PackTemperature:         v.PackTempC,
+		MaxCellTemperature:      v.PackTempC + 1.5, // Hottest cell runs slightly above pack average
+		MinCellTemperature:      v.PackTempC - 1.0,
 	}
 
 	// Cabin & Closures

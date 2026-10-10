@@ -6,6 +6,7 @@ package api
 //	GET  /api/v1/vehicles/{vin}         Snapshot of one vehicle
 //	WS   /api/v1/vehicles/{vin}/stream  Live pushes whenever that vehicle's twin changes
 //	POST /api/v1/vehicles/{vin}/command Sign + send a command, wait for the vehicle's verdict
+//	WS   /api/v1/fleet/stream           Live pushes for every vehicle (drives the fleet map)
 //	WS   /api/v1/alerts/stream          Live feed of rules-engine alerts for the whole fleet
 
 import (
@@ -93,6 +94,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/v1/vehicles/{vin}", s.handleGetVehicle)
 	mux.HandleFunc("GET /api/v1/vehicles/{vin}/stream", s.handleVehicleStream)
 	mux.HandleFunc("POST /api/v1/vehicles/{vin}/command", s.handleCommand)
+	mux.HandleFunc("GET /api/v1/fleet/stream", s.handleFleetStream)
 	mux.HandleFunc("GET /api/v1/alerts/stream", s.handleAlertStream)
 	return s.withCORS(mux)
 }
@@ -238,16 +240,26 @@ func (s *Server) handleVehicleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "unknown vehicle")
 		return
 	}
+	s.streamSnapshots(w, r, func(snap twin.Snapshot) bool { return snap.Vin == vin })
+}
 
+func (s *Server) handleFleetStream(w http.ResponseWriter, r *http.Request) {
+	s.streamSnapshots(w, r, func(twin.Snapshot) bool { return true })
+}
+
+// streamSnapshots sends the current state of every matching vehicle, then pushes each matching change
+func (s *Server) streamSnapshots(w http.ResponseWriter, r *http.Request, match func(twin.Snapshot) bool) {
 	// Subscribe BEFORE reading the current state so no update can slip through the gap
 	updates, unsubscribe := s.twins.Updates().Subscribe()
 	defer unsubscribe()
 
 	s.serveWebSocket(w, r, func(ctx context.Context, conn *websocket.Conn) error {
 		// Send the current state immediately so the UI doesn't wait up to a second for the first frame
-		if snap, ok := s.twins.GetSnapshot(vin); ok {
-			if err := writeSnapshot(ctx, conn, snap); err != nil {
-				return err
+		for _, snap := range s.twins.Snapshots() {
+			if match(snap) {
+				if err := writeSnapshot(ctx, conn, snap); err != nil {
+					return err
+				}
 			}
 		}
 		for {
@@ -258,8 +270,8 @@ func (s *Server) handleVehicleStream(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					return nil
 				}
-				if snap.Vin != vin {
-					continue // The feed carries the whole fleet; this client only wants one car
+				if !match(snap) {
+					continue // The feed carries the whole fleet; this client may only want one car
 				}
 				if err := writeSnapshot(ctx, conn, snap); err != nil {
 					return err

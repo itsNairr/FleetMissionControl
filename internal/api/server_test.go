@@ -223,6 +223,24 @@ func TestVehicleStreamPushesOnlyThatVehicle(t *testing.T) {
 	}
 }
 
+func TestFleetStreamPushesEveryVehicle(t *testing.T) {
+	env := newTestEnv(t)
+	env.addVehicle("SIM-0001", true, 10)
+	env.addVehicle("SIM-0002", true, 20)
+
+	conn := dial(t, env, "/api/v1/fleet/stream")
+
+	// Initial state for the whole fleet, in VIN order
+	if first, second := readJSON(t, conn), readJSON(t, conn); first["vin"] != "SIM-0001" || second["vin"] != "SIM-0002" {
+		t.Fatalf("expected initial snapshots for both vehicles, got %v / %v", first, second)
+	}
+
+	env.twins.Update(&pb.VehicleTelemetry{Vin: "SIM-0002", SpeedKmh: 99})
+	if msg := readJSON(t, conn); msg["vin"] != "SIM-0002" {
+		t.Fatalf("expected pushed SIM-0002 update, got %v", msg)
+	}
+}
+
 func TestAlertStream(t *testing.T) {
 	env := newTestEnv(t)
 	conn := dial(t, env, "/api/v1/alerts/stream")
