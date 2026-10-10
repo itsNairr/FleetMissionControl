@@ -3,10 +3,8 @@ package main
 import (
 	"context"
 	"crypto/ecdsa"
-	"encoding/binary"
 	"flag"
 	"fmt"
-	"io"
 	"net"
 	"os"
 	"os/signal"
@@ -18,6 +16,7 @@ import (
 	"github.com/itsnairr/fleet-telemetry-engine/internal/crypto"
 	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/simulator"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/wire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -41,7 +40,7 @@ func main() {
 		fmt.Println("Please run the Gateway first so it generates the fleet keys!")
 		return
 	}
-	fmt.Println("🔑 Loaded fleet ECDSA public key. Ready to verify cloud commands.\n")
+	fmt.Print("🔑 Loaded fleet ECDSA public key. Ready to verify cloud commands.\n\n")
 
 
 
@@ -115,18 +114,21 @@ func simulateVehicle(ctx context.Context, v *simulator.SimulatedVehicle, serverA
 		// Create a per-connection cancelable context:
 		// If either the reader or writer socket breaks, both exit cleanly so the outer loop can reconnect.
 		connCtx, cancelConn := context.WithCancel(ctx)
+		// Both goroutines below write to this socket (telemetry + command acks), so they share one locked writer
+		writer := wire.NewFrameWriter(conn)
 		go func() {
-			listenForCommands(connCtx, conn, v, pubKey)
+			listenForCommands(connCtx, conn, writer, v, pubKey)
 			cancelConn() // If socket reads fail/disconnect, cancel connection
 		}()
 
 		// Stream telemetry until socket breaks or Ctrl+C is pressed
-		streamTelemetry(connCtx, conn, v)
+		streamTelemetry(connCtx, writer, v)
+		cancelConn()
 		conn.Close()
 	}
 }
 
-func streamTelemetry(ctx context.Context, conn net.Conn, v *simulator.SimulatedVehicle) {
+func streamTelemetry(ctx context.Context, writer *wire.FrameWriter, v *simulator.SimulatedVehicle) {
 	// Initialize a 1 Hz ticker
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
@@ -142,29 +144,17 @@ func streamTelemetry(ctx context.Context, conn net.Conn, v *simulator.SimulatedV
 			v.Tick()
 			msg := v.ToTelemetry()
 
-			// Serialize Protobuf
-			data, err := proto.Marshal(msg)
-			if err != nil {
-				fmt.Printf("[%s] Marshal error: %v\n", v.Vin, err)
-				return
-			}
-
-			// 4-byte length-prefix framing
-			header := make([]byte, 4)
-			binary.BigEndian.PutUint32(header, uint32(len(data)))
-
-			if _, err := conn.Write(header); err != nil {
-				return
-			}
-			if _, err := conn.Write(data); err != nil {
+			// Serialize Protobuf + length-prefixed framing in one locked write
+			if err := writer.WriteMessage(wire.MsgTelemetry, msg); err != nil {
 				return
 			}
 		}
 	}
 }
 
-// listenForCommands reads length-prefixed Protobuf commands from the Gateway and dispatches to the vehicle ECU
-func listenForCommands(ctx context.Context, conn net.Conn, v *simulator.SimulatedVehicle, pubKey *ecdsa.PublicKey) {
+// listenForCommands reads framed Protobuf commands from the Gateway, dispatches them to the vehicle ECU,
+// and reports the outcome back so the operator sees accepted/rejected
+func listenForCommands(ctx context.Context, conn net.Conn, writer *wire.FrameWriter, v *simulator.SimulatedVehicle, pubKey *ecdsa.PublicKey) {
 	for {
 		select {
 		case <-ctx.Done():
@@ -172,29 +162,38 @@ func listenForCommands(ctx context.Context, conn net.Conn, v *simulator.Simulate
 		default:
 		}
 
-		// 1. Read 4-byte length prefix
-		header := make([]byte, 4)
-		if _, err := io.ReadFull(conn, header); err != nil {
-			return // Socket closed or EOF
+		// 1. Read one length-prefixed, type-tagged frame
+		msgType, payload, err := wire.ReadFrame(conn)
+		if err != nil {
+			return // Socket closed, EOF or corrupt stream
 		}
-		msgLen := binary.BigEndian.Uint32(header)
-
-		// 2. Read Protobuf payload
-		payload := make([]byte, msgLen)
-		if _, err := io.ReadFull(conn, payload); err != nil {
-			return
+		if msgType != wire.MsgCommand {
+			continue
 		}
 
-		// 3. Unmarshal Protobuf command
+		// 2. Unmarshal Protobuf command
 		cmd := &pb.VehicleCommand{}
 		if err := proto.Unmarshal(payload, cmd); err != nil {
 			fmt.Printf("[%s] Malformed command protobuf: %v\n", v.Vin, err)
 			continue
 		}
 
-		// 4. Verify signature, check replay window, enforce ISO-26262 safety interlocks & execute!
+		// 3. Verify signature, check replay window, enforce ISO-26262 safety interlocks & execute!
+		resp := &pb.CommandResponse{
+			CommandId: cmd.GetCommandId(),
+			Vin:       v.Vin,
+			Success:   true,
+		}
 		if err := v.ExecuteProtoCommand(cmd, pubKey); err != nil {
 			fmt.Printf("[%s] ❌ Command rejected: %v\n", v.Vin, err)
+			resp.Success = false
+			resp.ErrorMessage = err.Error()
+		}
+		resp.TimestampMs = time.Now().UnixMilli()
+
+		// 4. Acknowledge back to the gateway
+		if err := writer.WriteMessage(wire.MsgCommandResponse, resp); err != nil {
+			return
 		}
 	}
 }

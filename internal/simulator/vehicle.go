@@ -7,6 +7,7 @@ import (
 	"time"
 	"errors"
 	"crypto/ecdsa"
+	"sync"
 
 	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
 	crypto "github.com/itsnairr/fleet-telemetry-engine/internal/crypto"
@@ -185,6 +186,10 @@ func SelectCompatibleModel(scenario Scenario) pb.VehicleModel {
 }
 
 type SimulatedVehicle struct {
+	// mu guards every field below: the physics loop (Tick/ToTelemetry) and the command listener
+	// run on different goroutines and would otherwise read/write the same fields at the same time
+	mu sync.Mutex
+
 	Vin          string
 	Model        pb.VehicleModel
 	Scenario     Scenario
@@ -262,6 +267,9 @@ func NewSimulatedVehicle(vin string, model pb.VehicleModel, scenario Scenario) *
 
 // Tick advances the vehicle state by 1 second.
 func (v *SimulatedVehicle) Tick() {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
 	// 1. Scenario-specific physics & battery behavior
 	switch v.Scenario {
 	case ScenarioHighwayCruising:
@@ -349,6 +357,9 @@ func (v *SimulatedVehicle) Tick() {
 
 // Creates the vehicle and immedietly returns on the address
 func (v *SimulatedVehicle) ToTelemetry() *pb.VehicleTelemetry { 
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
 	nowMs := time.Now().UnixMilli()
 
 	// Determine Gear & Driving Dynamics
@@ -461,6 +472,7 @@ func (v *SimulatedVehicle) ToTelemetry() *pb.VehicleTelemetry {
 }
 
 // UpdateLifecycle evaluates autonomous state transitions based on battery SoC and vehicle physics.
+// Caller must hold v.mu (it's invoked from inside Tick).
 func (v *SimulatedVehicle) UpdateLifecycle() {
 	switch v.Scenario {
 	case ScenarioHighwayCruising, ScenarioHeavyTowing, ScenarioUrbanCommute:
@@ -499,6 +511,9 @@ func (v *SimulatedVehicle) UpdateLifecycle() {
 
 // ExecuteCommand validates safety interlocks against real-time physical dynamics before applying state changes.
 func (v *SimulatedVehicle) ExecuteCommand(cmd VehicleCommand) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
 	switch cmd {
 	case CommandOpenFrunk:
 		// ISO-26262 interlock check
@@ -540,6 +555,9 @@ func (v *SimulatedVehicle) ExecuteCommand(cmd VehicleCommand) error {
 // ExecuteProtoCommand verifies the ECDSA signature with pubKey, checks ISO-26262 safety interlocks,
 // and applies the physical state transition to the vehicle.
 func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *ecdsa.PublicKey) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
 	// Gate 1: Cryptographic Authorization Check
 	valid, reason := crypto.VerifyCommand(pubKey, cmd, 5*time.Second)
 	if !valid {

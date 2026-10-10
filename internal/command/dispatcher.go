@@ -1,23 +1,34 @@
 package command
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
-	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/itsnairr/fleet-telemetry-engine/internal/crypto"
 	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/session"
-	"google.golang.org/protobuf/proto"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/wire"
 )
+
+// pendingCommand is a command waiting for the vehicle to acknowledge it
+type pendingCommand struct {
+	vin      string
+	response chan *pb.CommandResponse
+}
 
 // CommandDispatcher manages signing and transmitting authenticated commands to connected vehicles
 type CommandDispatcher struct {
 	privKey  *ecdsa.PrivateKey
 	sessions *session.SessionRegistry
+
+	mu      sync.Mutex
+	pending map[string]pendingCommand // command_id -> waiting caller
 }
 
 // NewCommandDispatcher creates a new dispatcher with the gateway private key and socket session registry
@@ -25,26 +36,95 @@ func NewCommandDispatcher(privKey *ecdsa.PrivateKey, sessions *session.SessionRe
 	return &CommandDispatcher{
 		privKey:  privKey,
 		sessions: sessions,
+		pending:  make(map[string]pendingCommand),
 	}
 }
 
-// Dispatch signs and sends a vehicle command down the active TCP connection for the target VIN
+// Dispatch signs and sends a vehicle command down the active TCP connection for the target VIN.
+// Fire-and-forget: it returns once the bytes are written, without waiting for the vehicle's verdict.
 func (d *CommandDispatcher) Dispatch(vin string, cmdType pb.CommandType, speedLimitMph float64) (*pb.VehicleCommand, error) {
-	// Check if vehicle is currently connected
-	conn, exists := d.sessions.Get(vin)
-	if !exists {
-		return nil, fmt.Errorf("vehicle %s is offline (no active socket session)", vin)
+	cmd, err := d.buildSignedCommand(vin, cmdType, speedLimitMph)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.send(cmd); err != nil {
+		return nil, err
+	}
+	return cmd, nil
+}
+
+// DispatchAndWait sends a command and blocks until the vehicle accepts/rejects it or ctx expires.
+// This is what the operator-facing API uses so the UI can show "Rejected: vehicle in motion".
+func (d *CommandDispatcher) DispatchAndWait(ctx context.Context, vin string, cmdType pb.CommandType, speedLimitMph float64) (*pb.CommandResponse, error) {
+	cmd, err := d.buildSignedCommand(vin, cmdType, speedLimitMph)
+	if err != nil {
+		return nil, err
 	}
 
+	// Register BEFORE sending so a very fast reply can't arrive before anyone is listening
+	responseCh := make(chan *pb.CommandResponse, 1)
+	d.mu.Lock()
+	d.pending[cmd.GetCommandId()] = pendingCommand{vin: vin, response: responseCh}
+	d.mu.Unlock()
+
+	defer func() {
+		d.mu.Lock()
+		delete(d.pending, cmd.GetCommandId())
+		d.mu.Unlock()
+	}()
+
+	if err := d.send(cmd); err != nil {
+		return nil, err
+	}
+
+	select {
+	case resp := <-responseCh:
+		return resp, nil
+	case <-ctx.Done():
+		return nil, fmt.Errorf("vehicle %s did not acknowledge %s (%s): %w", vin, cmd.GetType(), cmd.GetCommandId(), ctx.Err())
+	}
+}
+
+// HandleResponse routes a CommandResponse read off vin's socket to whoever is waiting on it.
+// vin is the identity of the socket it arrived on, so one car can't answer for another car's command.
+func (d *CommandDispatcher) HandleResponse(vin string, resp *pb.CommandResponse) {
+	status := "✅ accepted"
+	if !resp.GetSuccess() {
+		status = "❌ rejected: " + resp.GetErrorMessage()
+	}
+	fmt.Printf("[Dispatcher] %s %s %s\n", vin, resp.GetCommandId(), status)
+
+	d.mu.Lock()
+	p, ok := d.pending[resp.GetCommandId()]
+	d.mu.Unlock()
+
+	if !ok || p.vin != vin {
+		return // Fire-and-forget command, timed-out caller, or a spoofed ID from another vehicle
+	}
+
+	select {
+	case p.response <- resp:
+	default: // Duplicate ack, the first one already won
+	}
+}
+
+func (d *CommandDispatcher) buildSignedCommand(vin string, cmdType pb.CommandType, speedLimitMph float64) (*pb.VehicleCommand, error) {
 	// Generate random cryptographic nonce to prevent replay attacks
 	nonceBig, err := rand.Int(rand.Reader, big.NewInt(1000000000))
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate nonce: %w", err)
 	}
 
+	// Random 128-bit command ID (like a UUID). Timestamps aren't unique enough: on Windows the clock is
+	// coarse, so commands sent in the same instant would share an ID and their acks would get crossed.
+	idBytes := make([]byte, 16)
+	if _, err := rand.Read(idBytes); err != nil {
+		return nil, fmt.Errorf("failed to generate command id: %w", err)
+	}
+
 	// Construct command message
 	cmd := &pb.VehicleCommand{
-		CommandId:     fmt.Sprintf("cmd-%d", time.Now().UnixNano()),
+		CommandId:     "cmd-" + hex.EncodeToString(idBytes),
 		Vin:           vin,
 		Type:          cmdType,
 		SpeedLimitMph: speedLimitMph,
@@ -56,25 +136,21 @@ func (d *CommandDispatcher) Dispatch(vin string, cmdType pb.CommandType, speedLi
 	if err := crypto.SignCommand(d.privKey, cmd); err != nil {
 		return nil, fmt.Errorf("failed to sign command: %w", err)
 	}
-
-	// Serialize Protobuf
-	payload, err := proto.Marshal(cmd)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal command protobuf: %w", err)
-	}
-
-	// Encode 4-byte length prefix (Big-Endian network standard)
-	header := make([]byte, 4)
-	binary.BigEndian.PutUint32(header, uint32(len(payload)))
-
-	// Write header + payload to vehicle socket
-	if _, err := conn.Write(header); err != nil {
-		return nil, fmt.Errorf("failed to write command header to %s: %w", vin, err)
-	}
-	if _, err := conn.Write(payload); err != nil {
-		return nil, fmt.Errorf("failed to write command payload to %s: %w", vin, err)
-	}
-
-	fmt.Printf("[Dispatcher] 🚀 Dispatched %s to %s (ID: %s)\n", cmd.Type, vin, cmd.CommandId)
 	return cmd, nil
+}
+
+func (d *CommandDispatcher) send(cmd *pb.VehicleCommand) error {
+	// Check if vehicle is currently connected
+	s, exists := d.sessions.Get(cmd.GetVin())
+	if !exists {
+		return fmt.Errorf("vehicle %s is offline (no active socket session)", cmd.GetVin())
+	}
+
+	// Single locked write of the whole frame, safe even if many requests target the same car at once
+	if err := s.Writer.WriteMessage(wire.MsgCommand, cmd); err != nil {
+		return fmt.Errorf("failed to write command to %s: %w", cmd.GetVin(), err)
+	}
+
+	fmt.Printf("[Dispatcher] 🚀 Dispatched %s to %s (ID: %s)\n", cmd.GetType(), cmd.GetVin(), cmd.GetCommandId())
+	return nil
 }

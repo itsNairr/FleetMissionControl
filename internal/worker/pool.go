@@ -7,6 +7,7 @@ import (
 	"time"
 
 	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/pubsub"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/rules"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/twin"
 )
@@ -17,16 +18,18 @@ type TelemetryWorkerPool struct {
 	workerWg     sync.WaitGroup
 	twinRegistry *twin.DigitalTwinRegistry
 	rulesEngine  *rules.RulesEngine
+	alerts       *pubsub.Broker[*pb.VehicleAlert] // Fan-out of triggered alerts to dashboards
 }
 
 // Essentially a python __init__ function to create a telemetry worker pool
-func NewTelemetryWorkerPool(numWorkers int, queueCapacity int, twinRegistry *twin.DigitalTwinRegistry, rulesEngine *rules.RulesEngine) *TelemetryWorkerPool {
+func NewTelemetryWorkerPool(numWorkers int, queueCapacity int, twinRegistry *twin.DigitalTwinRegistry, rulesEngine *rules.RulesEngine, alerts *pubsub.Broker[*pb.VehicleAlert]) *TelemetryWorkerPool {
 	return &TelemetryWorkerPool{
 		numWorkers: numWorkers,
 		jobQueue:   make(chan *pb.VehicleTelemetry, queueCapacity),
 		//All numWorkers worker goroutines are actively listening to that single shared jobQueue channel
 		twinRegistry: twinRegistry,
 		rulesEngine:  rulesEngine,
+		alerts:       alerts,
 	}
 }
 
@@ -81,6 +84,9 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 			alerts := p.rulesEngine.Evaluate(t)
 			for _, alert := range alerts {
 				fmt.Printf("🚨 [%s ALERT] %s: %s\n", alert.GetLevel().String(), alert.GetCode(), alert.GetDescription())
+				if p.alerts != nil {
+					p.alerts.Publish(alert)
+				}
 			}
 		}
 

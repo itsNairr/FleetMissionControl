@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -10,34 +9,44 @@ import (
 	"os/signal"
 	"syscall"
 
-	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
-	"github.com/itsnairr/fleet-telemetry-engine/internal/session"
-	"github.com/itsnairr/fleet-telemetry-engine/internal/worker"
-	"google.golang.org/protobuf/proto"
-	"github.com/itsnairr/fleet-telemetry-engine/internal/twin"
-	"github.com/itsnairr/fleet-telemetry-engine/internal/rules"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/command"
 	"github.com/itsnairr/fleet-telemetry-engine/internal/crypto"
+	pb "github.com/itsnairr/fleet-telemetry-engine/internal/protocol"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/pubsub"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/rules"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/session"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/twin"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/wire"
+	"github.com/itsnairr/fleet-telemetry-engine/internal/worker"
+	"google.golang.org/protobuf/proto"
 )
 
-func handleConnection(conn net.Conn, pool *worker.TelemetryWorkerPool, registry *session.SessionRegistry) {
+// gateway bundles the shared services every vehicle connection needs
+type gateway struct {
+	pool       *worker.TelemetryWorkerPool
+	sessions   *session.SessionRegistry
+	twins      *twin.DigitalTwinRegistry
+	dispatcher *command.CommandDispatcher
+}
+
+func (g *gateway) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
 	var vin string
 
 	defer func() {
-		// If we identified the vehicle, clean up its socket when it disconnects
-		if vin != "" {
-			registry.Unregister(vin)
+		// If we identified the vehicle, clean up its socket when it disconnects.
+		// Only mark offline if this was still the car's current socket (it may have already reconnected).
+		if vin != "" && g.sessions.Unregister(vin, conn) {
+			g.twins.SetOnline(vin, false)
 		}
 	}()
 
 	fmt.Printf("New vehicle connected: %s\n", conn.RemoteAddr().String())
 
 	for {
-		// Read the 4-byte header
-		header := make([]byte, 4)
-		_, err := io.ReadFull(conn, header)
+		// Read one length-prefixed, type-tagged frame
+		msgType, payload, err := wire.ReadFrame(conn)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				fmt.Println("Vehicle disconnected cleanly.")
@@ -46,29 +55,38 @@ func handleConnection(conn net.Conn, pool *worker.TelemetryWorkerPool, registry 
 			}
 			return // Exit the goroutine when the vehicle disconnects
 		}
-		// Decode the 4 bytes into a uint32 integer (Big-Endian is network standard):
-		messageLength := binary.BigEndian.Uint32(header)
-		// Read EXACTLY that many bytes for the protobuf payload
-		payload := make([]byte, messageLength)
-		_, err = io.ReadFull(conn, payload)
-		if err != nil {
-			fmt.Printf("Failed to read payload: %v\n", err)
-			return
-		}
 
-		// Unmarshal into Protobuf struct
-		telemetry := &pb.VehicleTelemetry{}
-		if err := proto.Unmarshal(payload, telemetry); err != nil {
-			fmt.Printf("Failed to unmarshal protobuf: %v\n", err)
-			continue
-		}
+		switch msgType {
+		case wire.MsgTelemetry:
+			// Unmarshal into Protobuf struct
+			telemetry := &pb.VehicleTelemetry{}
+			if err := proto.Unmarshal(payload, telemetry); err != nil {
+				fmt.Printf("Failed to unmarshal telemetry: %v\n", err)
+				continue
+			}
 
-		// register to hashmap if vin is empty (first connection)
-		if vin == "" {
-			vin = telemetry.GetVin()
-			registry.Register(vin, conn)
+			// register to hashmap if vin is empty (first frame on this connection)
+			if vin == "" {
+				vin = telemetry.GetVin()
+				g.sessions.Register(vin, conn)
+				g.twins.SetOnline(vin, true)
+			}
+			g.pool.Enqueue(telemetry)
+
+		case wire.MsgCommandResponse:
+			if vin == "" {
+				continue // Vehicle hasn't identified itself yet
+			}
+			resp := &pb.CommandResponse{}
+			if err := proto.Unmarshal(payload, resp); err != nil {
+				fmt.Printf("Failed to unmarshal command response: %v\n", err)
+				continue
+			}
+			g.dispatcher.HandleResponse(vin, resp)
+
+		default:
+			fmt.Printf("Ignoring unknown frame type %d from %s\n", msgType, conn.RemoteAddr())
 		}
-		pool.Enqueue(telemetry)
 	}
 
 }
@@ -81,7 +99,8 @@ func main() {
 
 	twinRegistry := twin.NewDigitalTwinRegistry() //Twin Init to connect both the sim and the car OS
 	rulesEngine := rules.NewRulesEngine() 
-	pool := worker.NewTelemetryWorkerPool(10, 100, twinRegistry, rulesEngine)
+	alertBroker := pubsub.NewBroker[*pb.VehicleAlert](64) //Dashboards subscribe here for live alerts
+	pool := worker.NewTelemetryWorkerPool(10, 100, twinRegistry, rulesEngine, alertBroker)
 	pool.Start()
 
 
@@ -97,7 +116,13 @@ func main() {
 
 	//Initialize Command Dispatcher with Gateway Private Key & Session Registry
 	dispatcher := command.NewCommandDispatcher(privKey, sessionRegistry)
-	_ = dispatcher
+
+	gw := &gateway{
+		pool:       pool,
+		sessions:   sessionRegistry,
+		twins:      twinRegistry,
+		dispatcher: dispatcher,
+	}
 
 
 	//Setup TCP connection
@@ -125,7 +150,7 @@ func main() {
 			}
 
 			// Handle this specific vehicle concurrently without blocking other cars
-			go handleConnection(conn, pool, sessionRegistry)
+			go gw.handleConnection(conn)
 		}
 	}()
 
