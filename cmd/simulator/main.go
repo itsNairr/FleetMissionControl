@@ -188,6 +188,9 @@ func listenForCommands(ctx context.Context, conn net.Conn, writer *wire.FrameWri
 			fmt.Printf("[%s] ❌ Command rejected: %v\n", v.Vin, err)
 			resp.Success = false
 			resp.ErrorMessage = err.Error()
+		} else {
+			// Immediately push updated telemetry so state synchronizes with zero latency
+			_ = writer.WriteMessage(wire.MsgTelemetry, v.ToTelemetry())
 		}
 		resp.TimestampMs = time.Now().UnixMilli()
 

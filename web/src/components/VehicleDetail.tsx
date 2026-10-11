@@ -150,7 +150,7 @@ export function VehicleDetail({ vehicle, alertVins, pending, theme, onCommand, o
             {pending.has('SET_SPEED_LIMIT') ? 'Sending…' : `Set ${speedLimit} ${u.speedUnit} limit`}
           </button>
           <button className="btn btn-ghost" disabled={offline || pending.has('REBOOT_COMPUTER')} onClick={() => onCommand('REBOOT_COMPUTER')}>
-            <Power size={15} aria-hidden /> Reboot infotainment
+            <Power size={15} aria-hidden /> Reboot onboard computer
           </button>
         </div>
       </div>
@@ -176,7 +176,7 @@ function QuickButton({ spot, busy, disabled, onClick }: { spot: Hotspot; busy: b
     >
       <span className="quick-circle"><Icon size={22} strokeWidth={1.8} aria-hidden /></span>
       <span className="quick-label">{spot.label}</span>
-      <span className="quick-state">{busy ? 'Sending…' : spot.state}</span>
+      <span className="quick-state">{spot.state}</span>
     </button>
   )
 }

@@ -25,7 +25,7 @@ export function useCommands() {
     window.setTimeout(() => dismiss(id), 6000)
   }, [dismiss])
 
-  const run = useCallback(async (vin: string, command: CommandType, speedLimitMph?: number) => {
+  const run = useCallback(async (vin: string, command: CommandType, speedLimitMph?: number): Promise<boolean> => {
     const key = `${vin}|${command}`
     setPending((p) => new Set(p).add(key))
     try {
@@ -36,11 +36,13 @@ export function useCommands() {
         ok: result.success,
         message: result.success ? 'Accepted by vehicle' : (result.error ?? 'Rejected by vehicle'),
       })
+      return result.success
     } catch (err) {
       const message = err instanceof ApiError
         ? ({ 503: 'Vehicle offline', 504: 'No response from vehicle' } as Record<number, string>)[err.status] ?? err.message
         : 'Gateway unreachable'
       push({ vin, command, ok: false, message })
+      return false
     } finally {
       setPending((p) => {
         const next = new Set(p)

@@ -36,17 +36,3 @@ your own provider for anything beyond local development.
 `tools/routegen/fetch_routes.py` from the [OSRM](https://project-osrm.org) demo server.
 Road geometry © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, ODbL 1.0.
 Re-running the script respects the demo server's policy (≤ 1 request/second, 11 requests total).
-
-## Adding a realistic model (e.g. from Sketchfab)
-
-1. **Check the license on the model page.** Good choices are **CC0** and **CC-BY 4.0**.
-   Avoid *Editorial*, *NonCommercial (NC)* and *NoDerivatives (ND)* if you plan to modify or monetise,
-   and never use models ripped from games. Respect any extra notes on the page (some say "NoAI").
-2. Download as **glTF / .glb**. Smaller is better for the web: aim for under 5 MB. Compress with
-   `npx @gltf-transform/cli optimize in.glb out.glb` if needed.
-3. Put it in `public/models/<source>/` and point the entry in `src/lib/models.ts` at it. Open it
-   at https://gltf.report to find node names for wheels / doors, and fill in `parts`.
-4. **Attribute it** (required by CC-BY): add a row above *and* an entry to `CREDITS` in
-   `src/lib/models.ts`, using the TASL format:
-
-   > "**Title**" by **Author** is licensed under **CC BY 4.0**, source: **URL**. Changes: *what you changed*.

@@ -345,7 +345,7 @@ small { font-size: 0.55em; font-weight: 500; letter-spacing: 0; margin-left: 2px
   background: var(--color-paper); color: var(--color-graphite); border: 0; box-shadow: var(--shadow-float);
   transition: background-color 150ms, color 150ms; /* never transition transform: it is set every frame */
 }
-.hotspot:disabled { cursor: not-allowed; opacity: 0.6; }
+.hotspot:disabled:not(.is-busy) { cursor: not-allowed; opacity: 0.6; }
 .hotspot-dot {
   width: 16px; height: 16px; border-radius: 50%; background: var(--color-drive-blue); flex-shrink: 0;
   animation: hotspot-pulse 2.2s ease-out infinite;
@@ -363,17 +363,18 @@ small { font-size: 0.55em; font-weight: 500; letter-spacing: 0; margin-left: 2px
 /* Round quick controls (Rivian app) */
 .quick-controls { display: flex; justify-content: center; gap: 28px; padding: 16px 20px 4px; }
 .quick { display: grid; justify-items: center; gap: 2px; background: none; border: 0; padding: 0; min-width: 64px; }
-.quick:disabled { cursor: not-allowed; opacity: 0.45; }
+.quick:disabled:not(.is-busy) { cursor: not-allowed; opacity: 0.45; }
+.quick.is-busy { cursor: wait; }
 .quick-circle {
   width: 56px; height: 56px; border-radius: 50%; display: grid; place-items: center; margin-bottom: 6px;
-  background: var(--raised); color: var(--ink); transition: background-color 150ms, color 150ms;
+  background: var(--raised); color: var(--ink); transition: background-color 150ms, color 150ms, box-shadow 150ms;
 }
-.quick:hover:not(:disabled) .quick-circle { background: var(--hairline-strong); }
+.quick:hover:not(:disabled):not(.is-active) .quick-circle { background: var(--hairline-strong); }
 .quick.is-active .quick-circle { background: var(--invert-bg); color: var(--invert-ink); }
-.quick.is-busy .quick-circle { animation: breathe 1s ease-in-out infinite alternate; }
-@keyframes breathe { to { opacity: 0.5; } }
+.quick.is-active:hover:not(:disabled) .quick-circle { opacity: 0.9; }
+.quick.is-busy .quick-circle { box-shadow: 0 0 0 2.5px var(--st-drive); }
 .quick-label { font-size: 12px; font-weight: 600; }
-.quick-state { font-size: 11px; color: var(--ink-2); }
+.quick-state { font-size: 11px; color: var(--ink-2); min-height: 16px; }
 .offline-note { margin: 8px 20px 0; font-size: 12px; color: var(--ink-2); text-align: center; }
 
 /* Gauge + range */

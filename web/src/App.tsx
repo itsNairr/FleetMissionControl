@@ -12,6 +12,9 @@ import { useFleet } from './hooks/useFleet'
 import { useTheme } from './hooks/useTheme'
 import { CREDITS } from './lib/models'
 
+import { applyOptimisticCommand } from './lib/vehicle'
+import type { CommandType } from './api/types'
+
 /** Selected VIN lives in the URL hash (#SIM-0004) so a view can be bookmarked or shared */
 function useSelectedVin(): [string | null, (vin: string | null) => void] {
   const read = () => decodeURIComponent(window.location.hash.slice(1)) || null
@@ -40,6 +43,18 @@ export default function App() {
   const alertVins = useMemo(() => new Set(alerts.map((a) => a.vin)), [alerts])
   const selected = selectedVin ? fleet.vehicles.get(selectedVin) : undefined
 
+  const handleCommand = async (cmd: CommandType, speedLimitMph?: number) => {
+    if (!selected) return
+    const prevVehicle = selected
+    // Optimistically apply closure changes for instant visual feedback without glitching
+    fleet.patchVehicle(selected.vin, (v) => applyOptimisticCommand(v, cmd))
+    const ok = await commands.run(selected.vin, cmd, speedLimitMph)
+    if (!ok && prevVehicle) {
+      // Revert if rejected by ISO-26262 interlock or network error
+      fleet.patchVehicle(selected.vin, () => prevVehicle)
+    }
+  }
+
   // Esc closes the vehicle panel
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && select(null)
@@ -66,7 +81,7 @@ export default function App() {
           alertVins={alertVins}
           pending={commands.pendingFor(selected.vin)}
           theme={theme}
-          onCommand={(cmd, mph) => commands.run(selected.vin, cmd, mph)}
+          onCommand={handleCommand}
           onClose={() => select(null)}
         />
       )}

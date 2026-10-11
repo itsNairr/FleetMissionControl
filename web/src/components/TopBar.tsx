@@ -24,17 +24,6 @@ export function TopBar({ vehicles, alertVins, alertCount, link, theme, onToggleT
 
   return (
     <header className="topbar">
-      <div className="brand">
-        <svg viewBox="0 0 32 32" width="28" height="28" aria-hidden>
-          <rect width="32" height="32" rx="9" fill="var(--color-solar-yellow)" />
-          <path d="M16 7 L23 16 L16 25 L9 16 Z" fill="none" stroke="var(--color-graphite)" strokeWidth="2.6" strokeLinejoin="round" />
-          <circle cx="16" cy="16" r="2.4" fill="var(--color-graphite)" />
-        </svg>
-        <div className="brand-text">
-          <span className="brand-name">Mission Control</span>
-          <span className="brand-sub">Fleet operations</span>
-        </div>
-      </div>
 
       <dl className="kpis">
         <div className="kpi">

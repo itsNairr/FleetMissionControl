@@ -6,6 +6,7 @@ import { useSocket, type SocketStatus } from './useSocket'
 export interface Fleet {
   vehicles: Map<string, Vehicle>
   status: SocketStatus
+  patchVehicle: (vin: string, update: (prev: Vehicle) => Vehicle) => void
 }
 
 const FLUSH_MS = 250 // Batch pushes: 20 cars × 1 Hz would otherwise mean 20 React renders per second
@@ -43,5 +44,16 @@ export function useFleet(): Fleet {
     return () => window.clearInterval(timer)
   }, [])
 
-  return { vehicles, status }
+  const patchVehicle = (vin: string, update: (prev: Vehicle) => Vehicle) => {
+    setVehicles((prev) => {
+      const current = prev.get(vin)
+      if (!current) return prev
+      const updated = update(current)
+      const next = new Map(prev)
+      next.set(vin, updated)
+      return next
+    })
+  }
+
+  return { vehicles, status, patchVehicle }
 }

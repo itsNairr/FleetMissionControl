@@ -1,4 +1,4 @@
-import type { Vehicle } from '../api/types'
+import type { CommandType, Vehicle } from '../api/types'
 
 export type FleetStatus = 'alert' | 'charging' | 'driving' | 'parked' | 'offline'
 
@@ -36,6 +36,59 @@ export function closures(v: Vehicle) {
     locked: cabin?.isLocked ?? true,
     frunkOpen: cabin?.frunkOpen ?? false,
     rearOpen: (cabin?.trunkOrLiftgateOpen ?? false) || (v.telemetry.truckState?.tailgateOpen ?? false),
+  }
+}
+
+/** Returns a copy of the vehicle with closures optimistically updated for instant UI responsiveness */
+export function applyOptimisticCommand(v: Vehicle, cmd: CommandType): Vehicle {
+  const t = v.telemetry
+  const cabin = t.cabinState
+    ? { ...t.cabinState }
+    : {
+        insideTempCelsius: 20,
+        outsideTempCelsius: 20,
+        climateOn: false,
+        isLocked: true,
+        sentryOrGuardModeActive: false,
+        driverDoorOpen: false,
+        passengerDoorOpen: false,
+        rearLeftDoorOpen: false,
+        rearRightDoorOpen: false,
+        frunkOpen: false,
+        trunkOrLiftgateOpen: false,
+      }
+  const truck = t.truckState ? { ...t.truckState } : null
+
+  switch (cmd) {
+    case 'UNLOCK_DOORS':
+      cabin.isLocked = false
+      break
+    case 'LOCK_DOORS':
+      cabin.isLocked = true
+      break
+    case 'OPEN_FRUNK':
+      cabin.frunkOpen = true
+      break
+    case 'CLOSE_FRUNK':
+      cabin.frunkOpen = false
+      break
+    case 'OPEN_TRUNK':
+      cabin.trunkOrLiftgateOpen = true
+      if (truck) truck.tailgateOpen = true
+      break
+    case 'CLOSE_TRUNK':
+      cabin.trunkOrLiftgateOpen = false
+      if (truck) truck.tailgateOpen = false
+      break
+  }
+
+  return {
+    ...v,
+    telemetry: {
+      ...t,
+      cabinState: cabin,
+      truckState: truck,
+    },
   }
 }
 
