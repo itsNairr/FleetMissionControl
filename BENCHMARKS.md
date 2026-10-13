@@ -1,4 +1,4 @@
-# Fleet Mission Control — Performance Benchmarks
+# Performance Benchmarks
 
 Every figure in this document was directly measured on this machine using Go automated test benchmarks (`testing.B` and in-process network harness). No figures are estimated or simulated.
 
