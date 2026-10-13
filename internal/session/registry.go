@@ -20,6 +20,7 @@ type Session struct {
 type SessionRegistry struct {
 	mu       sync.RWMutex
 	sessions map[string]*Session
+	Quiet    bool // If true, suppresses stdout logging (useful for benchmarks)
 }
 
 // NewSessionRegistry initializes a thread-safe vehicle session
@@ -34,7 +35,9 @@ func (r *SessionRegistry) Register(vin string, conn net.Conn) {
 	r.mu.Lock() //Lock the map so no other car can chnage the sessions map or else it will corrupt
 	defer r.mu.Unlock() //Unlock
 	r.sessions[vin] = &Session{Conn: conn, Writer: wire.NewFrameWriter(conn)} //Add the car to the map
-	fmt.Printf("[Session] Registered %s | Active Sockets: %d\n", vin, len(r.sessions))
+	if !r.Quiet {
+		fmt.Printf("[Session] Registered %s | Active Sockets: %d\n", vin, len(r.sessions))
+	}
 }
 
 // Unregister removes a vehicle socket when the connection closes.
@@ -48,7 +51,9 @@ func (r *SessionRegistry) Unregister(vin string, conn net.Conn) bool {
 		return false
 	}
 	delete(r.sessions, vin)
-	fmt.Printf("[Session] Deregistered %s | Active Sockets: %d\n", vin, len(r.sessions))
+	if !r.Quiet {
+		fmt.Printf("[Session] Deregistered %s | Active Sockets: %d\n", vin, len(r.sessions))
+	}
 	return true
 }
 

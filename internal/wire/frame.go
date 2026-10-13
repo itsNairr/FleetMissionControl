@@ -28,12 +28,12 @@ const MaxFrameSize = 1 << 20 // 1 MiB
 
 // ReadFrame blocks until one full frame has arrived and returns its type and protobuf payload
 func ReadFrame(r io.Reader) (MessageType, []byte, error) {
-	header := make([]byte, 4)
-	if _, err := io.ReadFull(r, header); err != nil {
+	var header [4]byte
+	if _, err := io.ReadFull(r, header[:]); err != nil {
 		return 0, nil, err
 	}
 
-	frameLen := binary.BigEndian.Uint32(header)
+	frameLen := binary.BigEndian.Uint32(header[:])
 	if frameLen < 1 || frameLen > MaxFrameSize {
 		// We can't find the next frame boundary after a bad header, so the stream is unusable
 		return 0, nil, fmt.Errorf("invalid frame length: %d bytes", frameLen)

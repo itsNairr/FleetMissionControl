@@ -30,6 +30,7 @@ var ErrVehicleOffline = errors.New("vehicle is offline (no active socket session
 type CommandDispatcher struct {
 	privKey  *ecdsa.PrivateKey
 	sessions *session.SessionRegistry
+	Quiet    bool // If true, suppresses stdout logging (useful in high-frequency benchmarks)
 
 	mu      sync.Mutex
 	pending map[string]pendingCommand // command_id -> waiting caller
@@ -96,7 +97,9 @@ func (d *CommandDispatcher) HandleResponse(vin string, resp *pb.CommandResponse)
 	if !resp.GetSuccess() {
 		status = "❌ rejected: " + resp.GetErrorMessage()
 	}
-	fmt.Printf("[Dispatcher] %s %s %s\n", vin, resp.GetCommandId(), status)
+	if !d.Quiet {
+		fmt.Printf("[Dispatcher] %s %s %s\n", vin, resp.GetCommandId(), status)
+	}
 
 	d.mu.Lock()
 	p, ok := d.pending[resp.GetCommandId()]
@@ -155,6 +158,8 @@ func (d *CommandDispatcher) send(cmd *pb.VehicleCommand) error {
 		return fmt.Errorf("failed to write command to %s: %w", cmd.GetVin(), err)
 	}
 
-	fmt.Printf("[Dispatcher] 🚀 Dispatched %s to %s (ID: %s)\n", cmd.GetType(), cmd.GetVin(), cmd.GetCommandId())
+	if !d.Quiet {
+		fmt.Printf("[Dispatcher] 🚀 Dispatched %s to %s (ID: %s)\n", cmd.GetType(), cmd.GetVin(), cmd.GetCommandId())
+	}
 	return nil
 }

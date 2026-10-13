@@ -157,7 +157,8 @@ type SimulatedVehicle struct {
 	IsLocked     bool
 	FrunkOpen    bool
 	TailgateOpen bool
-	TrunkOpen bool
+	TrunkOpen    bool
+	Quiet        bool // If true, suppresses console output (useful in benchmarks)
 }
 
 // Creates the simulated car and returns the address
@@ -551,12 +552,16 @@ func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *e
 	switch cmd.GetType() {
 	case pb.CommandType_COMMAND_TYPE_UNLOCK_DOORS:
 		v.IsLocked = false
-		fmt.Printf("[%s] 🔓 Doors UNLOCKED by cloud command\n", v.Vin)
+		if !v.Quiet {
+			fmt.Printf("[%s] 🔓 Doors UNLOCKED by cloud command\n", v.Vin)
+		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_LOCK_DOORS:
 		v.IsLocked = true
-		fmt.Printf("[%s] 🔒 Doors LOCKED by cloud command\n", v.Vin)
+		if !v.Quiet {
+			fmt.Printf("[%s] 🔒 Doors LOCKED by cloud command\n", v.Vin)
+		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_OPEN_FRUNK:
@@ -564,12 +569,16 @@ func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *e
 			return ErrFrunkHazardInMotion
 		}
 		v.FrunkOpen = true
-		fmt.Printf("[%s] 📦 Frunk OPENED by cloud command\n", v.Vin)
+		if !v.Quiet {
+			fmt.Printf("[%s] 📦 Frunk OPENED by cloud command\n", v.Vin)
+		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_CLOSE_FRUNK:
 		v.FrunkOpen = false
-		fmt.Printf("[%s] 📦 Frunk CLOSED by cloud command\n", v.Vin)
+		if !v.Quiet {
+			fmt.Printf("[%s] 📦 Frunk CLOSED by cloud command\n", v.Vin)
+		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_OPEN_TRUNK:
@@ -578,13 +587,17 @@ func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *e
 		}
 		v.TrunkOpen = true
 		v.TailgateOpen = true
-		fmt.Printf("[%s] 🚙 Trunk/Tailgate OPENED by cloud command\n", v.Vin)
+		if !v.Quiet {
+			fmt.Printf("[%s] 🚙 Trunk/Tailgate OPENED by cloud command\n", v.Vin)
+		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_CLOSE_TRUNK:
 		v.TrunkOpen = false
 		v.TailgateOpen = false
-		fmt.Printf("[%s] 🚙 Trunk/Tailgate CLOSED by cloud command\n", v.Vin)
+		if !v.Quiet {
+			fmt.Printf("[%s] 🚙 Trunk/Tailgate CLOSED by cloud command\n", v.Vin)
+		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_SET_SPEED_LIMIT:
@@ -592,11 +605,15 @@ func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *e
 		if limit > 0 && v.CurrentSpeed > limit {
 			v.CurrentSpeed = limit
 		}
-		fmt.Printf("[%s] ⚡ Speed limit governor set to %.1f mph\n", v.Vin, cmd.GetSpeedLimitMph())
+		if !v.Quiet {
+			fmt.Printf("[%s] ⚡ Speed limit governor set to %.1f mph\n", v.Vin, cmd.GetSpeedLimitMph())
+		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_REBOOT_COMPUTER:
-		fmt.Printf("[%s] 🔄 Infotainment/Telematics ECU rebooting...\n", v.Vin)
+		if !v.Quiet {
+			fmt.Printf("[%s] 🔄 Infotainment/Telematics ECU rebooting...\n", v.Vin)
+		}
 		return nil
 
 	default:
