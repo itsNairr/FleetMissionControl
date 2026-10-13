@@ -168,6 +168,15 @@ Run the Go unit and integration tests to verify framing, cryptographic signature
 go test -v ./...
 ```
 
+Run the automated performance benchmarks (`testing.B` and in-process network testbed):
+```bash
+go test -bench=. ./cmd/bench
+# or run the full 3-pass automated benchmark suite:
+go run ./cmd/bench
+```
+
+Measured performance numbers, latency percentiles, and bandwidth efficiency ratios are documented in [BENCHMARKS.md](BENCHMARKS.md).
+
 Verify frontend TypeScript types and compile the production build:
 ```bash
 cd web
@@ -199,6 +208,7 @@ bun run build
 FleetMissionControl/
 ├── certs/                      # ECDSA keys for command signing and validation
 ├── cmd/
+│   ├── bench/                  # Rigorous Go automated performance benchmark harness
 │   ├── gateway/                # TCP ingest listener, crypto signer, HTTP/WS server
 │   └── simulator/              # Concurrent EV physics and route simulation engine
 ├── internal/
