@@ -1,0 +1,11 @@
+.git
+.gitignore
+.github
+web/node_modules
+web/dist
+node_modules
+dist
+*.exe
+*.log
+*.tmp
+bench_*.txt

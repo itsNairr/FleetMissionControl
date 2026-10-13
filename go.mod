@@ -1,6 +1,6 @@
 module github.com/itsnairr/fleet-telemetry-engine
 
-go 1.27.1
+go 1.23
 
 require (
 	github.com/coder/websocket v1.8.14
