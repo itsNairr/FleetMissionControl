@@ -55,28 +55,28 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 			powerKw = t.GetBatteryState().GetPackPower()
 		}
 
-		// Status icons and details
-		statusIcon := "🚙"
+		// Status state and details
+		statusState := "CRUISING"
 		details := ""
 
 		if t.GetChargingState() != nil && t.GetChargingState().GetState() == pb.ChargingState_CHARGE_STATE_CHARGING {
-			statusIcon = "⚡"
-			details = fmt.Sprintf("🔌 Charging (+%.1f kW)", t.GetChargingState().GetChargingPowerKw())
+			statusState = "CHARGING"
+			details = fmt.Sprintf("Power: +%.1f kW", t.GetChargingState().GetChargingPowerKw())
 		} else if t.GetTruckState() != nil && t.GetTruckState().GetTowModeActive() {
-			statusIcon = "🚚"
-			details = fmt.Sprintf("📦 Towing (%.0f kg)", t.GetTruckState().GetEstimatedTrailerWeightKg())
+			statusState = "TOWING"
+			details = fmt.Sprintf("Trailer: %.0f kg", t.GetTruckState().GetEstimatedTrailerWeightKg())
 		} else if t.GetTruckState().GetTailgateOpen() {
-			statusIcon = "📦"
-			details = "🚪 Tailgate Open"
+			statusState = "SERVICE"
+			details = "Tailgate open"
 		} else if t.GetVehicleMode() == "OFF_ROAD" {
-			statusIcon = "🌲"
-			details = "⛰️ Trail Crawling"
+			statusState = "OFF-ROAD"
+			details = "Trail navigation"
 		}
 
 		// Alert Flagging
 		if len(t.GetActiveAlertCodes()) > 0 {
-			statusIcon = "⚠️ "
-			details += fmt.Sprintf(" 🚨 %v", t.GetActiveAlertCodes())
+			statusState = "ALERT"
+			details += fmt.Sprintf(" Alert codes: %v", t.GetActiveAlertCodes())
 		}
 
 		// Update live in-memory digital twin
@@ -89,7 +89,7 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 			alerts := p.rulesEngine.Evaluate(t)
 			for _, alert := range alerts {
 				if !p.Quiet {
-					fmt.Printf("🚨 [%s ALERT] %s: %s\n", alert.GetLevel().String(), alert.GetCode(), alert.GetDescription())
+					fmt.Printf("[WorkerPool] ALERT [%s] Code=%s: %s\n", alert.GetLevel().String(), alert.GetCode(), alert.GetDescription())
 				}
 				if p.alerts != nil {
 					p.alerts.Publish(alert)
@@ -99,9 +99,9 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 
 		// Live Mission Control Print
 		if !p.Quiet {
-			fmt.Printf("[Worker %2d] %s %-8s (%-12s) | %-16s | %5.1f km/h | 🔋 %4.1f%% (%+5.1f kW) | %s\n",
+			fmt.Printf("[Worker %2d] [%-8s] %-8s (%-12s) | %-16s | %5.1f km/h | SoC: %4.1f%% (%+5.1f kW) | %s\n",
 				workerID,
-				statusIcon,
+				statusState,
 				t.GetVin(),
 				modelName,
 				t.GetVehicleMode(),
@@ -120,7 +120,7 @@ func (p *TelemetryWorkerPool) worker(workerID int) {
 
 func (p *TelemetryWorkerPool) Start() {
 	if !p.Quiet {
-		fmt.Printf("Starting %d workers...\n", p.numWorkers)
+		fmt.Printf("[WorkerPool] Starting %d telemetry workers.\n", p.numWorkers)
 	}
 	for i := 1; i <= p.numWorkers; i++ {
 		p.workerWg.Add(1)
@@ -130,12 +130,12 @@ func (p *TelemetryWorkerPool) Start() {
 
 func (p *TelemetryWorkerPool) Stop() {
 	if !p.Quiet {
-		fmt.Println("Stopping all workers...")
+		fmt.Println("[WorkerPool] Stopping all telemetry workers.")
 	}
 	close(p.jobQueue)
 	p.workerWg.Wait()
 	if !p.Quiet {
-		fmt.Println("All workers stopped")
+		fmt.Println("[WorkerPool] All telemetry workers stopped.")
 	}
 }
 
@@ -146,7 +146,7 @@ func (p *TelemetryWorkerPool) Enqueue(telemetry *pb.VehicleTelemetry) bool {
 	default: // If the job queue is full, the default case is executed
 		p.droppedCount.Add(1)
 		if !p.Quiet {
-			fmt.Printf("Queue full! Dropping message for VIN: %s\n", telemetry.GetVin())
+			fmt.Printf("[WorkerPool] WARNING: Queue full. Dropping message for VIN: %s\n", telemetry.GetVin())
 		}
 		return false // Message dropped
 	}

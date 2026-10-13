@@ -93,12 +93,12 @@ func (d *CommandDispatcher) DispatchAndWait(ctx context.Context, vin string, cmd
 // HandleResponse routes a CommandResponse read off vin's socket to whoever is waiting on it.
 // vin is the identity of the socket it arrived on, so one car can't answer for another car's command.
 func (d *CommandDispatcher) HandleResponse(vin string, resp *pb.CommandResponse) {
-	status := "✅ accepted"
+	status := "ACCEPTED"
 	if !resp.GetSuccess() {
-		status = "❌ rejected: " + resp.GetErrorMessage()
+		status = "REJECTED: " + resp.GetErrorMessage()
 	}
 	if !d.Quiet {
-		fmt.Printf("[Dispatcher] %s %s %s\n", vin, resp.GetCommandId(), status)
+		fmt.Printf("[Dispatcher] Response received: VIN=%s, CommandID=%s, Status=%s\n", vin, resp.GetCommandId(), status)
 	}
 
 	d.mu.Lock()
@@ -159,7 +159,7 @@ func (d *CommandDispatcher) send(cmd *pb.VehicleCommand) error {
 	}
 
 	if !d.Quiet {
-		fmt.Printf("[Dispatcher] 🚀 Dispatched %s to %s (ID: %s)\n", cmd.GetType(), cmd.GetVin(), cmd.GetCommandId())
+		fmt.Printf("[Dispatcher] Command dispatched: Type=%s, VIN=%s, CommandID=%s\n", cmd.GetType(), cmd.GetVin(), cmd.GetCommandId())
 	}
 	return nil
 }

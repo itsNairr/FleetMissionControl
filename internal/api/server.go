@@ -101,7 +101,7 @@ func (s *Server) Handler() http.Handler {
 
 // ListenAndServe blocks until the server stops. Returns nil after a clean Shutdown.
 func (s *Server) ListenAndServe() error {
-	fmt.Printf("Mission Control API listening on http://%s/api/v1 ...\n", s.httpServer.Addr)
+	fmt.Printf("[API] Server listening on http://%s/api/v1\n", s.httpServer.Addr)
 	if err := s.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

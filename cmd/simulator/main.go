@@ -36,18 +36,18 @@ func main() {
 	// Load fleet public key burned into simulated vehicle ECU
 	pubKey, err := crypto.LoadPublicKeyPEM("certs/fleet_public.pem")
 	if err != nil {
-		fmt.Printf("⚠️ Warning: Could not load certs/fleet_public.pem: %v\n", err)
-		fmt.Println("Please run the Gateway first so it generates the fleet keys!")
+		fmt.Printf("WARNING: Could not load certs/fleet_public.pem: %v\n", err)
+		fmt.Println("Start the gateway first to generate the fleet keys.")
 		return
 	}
-	fmt.Print("🔑 Loaded fleet ECDSA public key. Ready to verify cloud commands.\n\n")
+	fmt.Print("Loaded fleet ECDSA public key. Ready to verify cloud commands.\n\n")
 
 
 
 
-	fmt.Printf("🚗 Initializing EV Fleet Simulator: %d vehicles\n", count)
-	fmt.Printf("📍 Telemetry Distribution: California Roads & Metros\n")
-	fmt.Printf("📡 Connecting to Gateway: %s\n\n", *serverAddrFlag)
+	fmt.Printf("Initializing vehicle fleet simulator: %d vehicles\n", count)
+	fmt.Println("Telemetry distribution: California routes and metropolitan regions")
+	fmt.Printf("Connecting to gateway: %s\n\n", *serverAddrFlag)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -71,7 +71,7 @@ func main() {
 	}
 
 	<-ctx.Done()
-	fmt.Println("\n🛑 Shutdown signal received. Disconnecting fleet cleanly...")
+	fmt.Println("\nShutdown signal received. Disconnecting vehicle fleet.")
 	wg.Wait()
 	fmt.Println("All simulated vehicles stopped. Exiting.")
 
@@ -93,7 +93,7 @@ func simulateVehicle(ctx context.Context, v *simulator.SimulatedVehicle, serverA
 
 		conn, err := net.Dial("tcp", serverAddr)
 		if err != nil {
-			fmt.Printf("[%s] 📡 Modem searching for gateway... retry in %v\n", v.Vin, backoff)
+			fmt.Printf("[%s] Modem searching for gateway. Retrying in %v.\n", v.Vin, backoff)
 			select {
 			case <-ctx.Done():
 				return
@@ -109,7 +109,7 @@ func simulateVehicle(ctx context.Context, v *simulator.SimulatedVehicle, serverA
 
 		// Connected, Reset backoff
 		backoff = 1 * time.Second
-		fmt.Printf("[%s] 📶 Connected to gateway\n", v.Vin)
+		fmt.Printf("[%s] Connected to gateway.\n", v.Vin)
 
 		// Create a per-connection cancelable context:
 		// If either the reader or writer socket breaks, both exit cleanly so the outer loop can reconnect.
@@ -174,7 +174,7 @@ func listenForCommands(ctx context.Context, conn net.Conn, writer *wire.FrameWri
 		// 2. Unmarshal Protobuf command
 		cmd := &pb.VehicleCommand{}
 		if err := proto.Unmarshal(payload, cmd); err != nil {
-			fmt.Printf("[%s] Malformed command protobuf: %v\n", v.Vin, err)
+			fmt.Printf("[%s] Invalid command protobuf payload: %v\n", v.Vin, err)
 			continue
 		}
 
@@ -185,7 +185,7 @@ func listenForCommands(ctx context.Context, conn net.Conn, writer *wire.FrameWri
 			Success:   true,
 		}
 		if err := v.ExecuteProtoCommand(cmd, pubKey); err != nil {
-			fmt.Printf("[%s] ❌ Command rejected: %v\n", v.Vin, err)
+			fmt.Printf("[%s] Command rejected: %v\n", v.Vin, err)
 			resp.Success = false
 			resp.ErrorMessage = err.Error()
 		} else {

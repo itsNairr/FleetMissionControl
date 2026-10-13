@@ -173,6 +173,6 @@ func EnsureFleetKeys(certsDir string) (*ecdsa.PrivateKey, *ecdsa.PublicKey, erro
 		return nil, nil, err
 	}
 
-	fmt.Printf("🔑 Generated fresh fleet ECDSA keypair in %s\n", certsDir)
+	fmt.Printf("Generated fleet ECDSA key pair in %s.\n", certsDir)
 	return priv, pub, nil
 }

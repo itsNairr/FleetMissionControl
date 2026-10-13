@@ -462,7 +462,9 @@ func (v *SimulatedVehicle) UpdateLifecycle() {
 	case ScenarioHighwayCruising, ScenarioHeavyTowing, ScenarioUrbanCommute:
 		// 1. Critical battery depletion -> Turtle Mode
 		if v.BatterySoC <= 5.0 {
-			fmt.Printf("[%s] 🐢 Critical battery (%.1f%%). Inverter throttling power to TURTLE_MODE\n", v.Vin, v.BatterySoC)
+			if !v.Quiet {
+				fmt.Printf("[%s] WARNING: Battery state of charge critical (%.1f%%). Throttling power output to low battery mode.\n", v.Vin, v.BatterySoC)
+			}
 			v.Scenario = ScenarioLowBatteryTurtle
 			v.CurrentSpeed = 25.0
 			return
@@ -470,7 +472,9 @@ func (v *SimulatedVehicle) UpdateLifecycle() {
 
 		// 2. Low battery reserve -> Pull into Supercharger stall
 		if v.BatterySoC <= 15.0 {
-			fmt.Printf("[%s] ⚡ Battery reserve low (%.1f%%). Auto-navigating into SUPERCHARGING stall\n", v.Vin, v.BatterySoC)
+			if !v.Quiet {
+				fmt.Printf("[%s] NOTICE: Battery state of charge low (%.1f%%). Routing to charging station.\n", v.Vin, v.BatterySoC)
+			}
 			v.Scenario = ScenarioSupercharging
 			v.CurrentSpeed = 0.0
 			return
@@ -479,7 +483,9 @@ func (v *SimulatedVehicle) UpdateLifecycle() {
 	case ScenarioSupercharging:
 		// 3. Fast charge taper knee reached -> Resume highway journey
 		if v.BatterySoC >= 80.0 {
-			fmt.Printf("[%s] 🔋 DC Fast Charge reached 80.0%% knee (%.1f%%). Unplugging and resuming HIGHWAY_CRUISING\n", v.Vin, v.BatterySoC)
+			if !v.Quiet {
+				fmt.Printf("[%s] NOTICE: DC fast charge reached 80.0%% (%.1f%%). Disconnecting charger and resuming highway cruising.\n", v.Vin, v.BatterySoC)
+			}
 			v.Scenario = ScenarioHighwayCruising
 			v.CurrentSpeed = 110.0
 			return
@@ -553,14 +559,14 @@ func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *e
 	case pb.CommandType_COMMAND_TYPE_UNLOCK_DOORS:
 		v.IsLocked = false
 		if !v.Quiet {
-			fmt.Printf("[%s] 🔓 Doors UNLOCKED by cloud command\n", v.Vin)
+			fmt.Printf("[%s] Doors unlocked by cloud command.\n", v.Vin)
 		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_LOCK_DOORS:
 		v.IsLocked = true
 		if !v.Quiet {
-			fmt.Printf("[%s] 🔒 Doors LOCKED by cloud command\n", v.Vin)
+			fmt.Printf("[%s] Doors locked by cloud command.\n", v.Vin)
 		}
 		return nil
 
@@ -570,14 +576,14 @@ func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *e
 		}
 		v.FrunkOpen = true
 		if !v.Quiet {
-			fmt.Printf("[%s] 📦 Frunk OPENED by cloud command\n", v.Vin)
+			fmt.Printf("[%s] Front trunk opened by cloud command.\n", v.Vin)
 		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_CLOSE_FRUNK:
 		v.FrunkOpen = false
 		if !v.Quiet {
-			fmt.Printf("[%s] 📦 Frunk CLOSED by cloud command\n", v.Vin)
+			fmt.Printf("[%s] Front trunk closed by cloud command.\n", v.Vin)
 		}
 		return nil
 
@@ -588,7 +594,7 @@ func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *e
 		v.TrunkOpen = true
 		v.TailgateOpen = true
 		if !v.Quiet {
-			fmt.Printf("[%s] 🚙 Trunk/Tailgate OPENED by cloud command\n", v.Vin)
+			fmt.Printf("[%s] Trunk opened by cloud command.\n", v.Vin)
 		}
 		return nil
 
@@ -596,7 +602,7 @@ func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *e
 		v.TrunkOpen = false
 		v.TailgateOpen = false
 		if !v.Quiet {
-			fmt.Printf("[%s] 🚙 Trunk/Tailgate CLOSED by cloud command\n", v.Vin)
+			fmt.Printf("[%s] Trunk closed by cloud command.\n", v.Vin)
 		}
 		return nil
 
@@ -606,13 +612,13 @@ func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *e
 			v.CurrentSpeed = limit
 		}
 		if !v.Quiet {
-			fmt.Printf("[%s] ⚡ Speed limit governor set to %.1f mph\n", v.Vin, cmd.GetSpeedLimitMph())
+			fmt.Printf("[%s] Speed governor set to %.1f mph.\n", v.Vin, cmd.GetSpeedLimitMph())
 		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_REBOOT_COMPUTER:
 		if !v.Quiet {
-			fmt.Printf("[%s] 🔄 Infotainment/Telematics ECU rebooting...\n", v.Vin)
+			fmt.Printf("[%s] Telematics ECU restart initiated.\n", v.Vin)
 		}
 		return nil
 

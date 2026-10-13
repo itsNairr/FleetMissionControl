@@ -47,7 +47,7 @@ func getSystemInfo() (cpu string, ram string, osName string, goVer string) {
 func main() {
 	cpu, ram, osName, goVer := getSystemInfo()
 	fmt.Println("================================================================================")
-	fmt.Println("🚀 Fleet Mission Control Engine — Automated Rigorous Benchmark Suite")
+	fmt.Println("Fleet Mission Control Engine — Automated Benchmark Suite")
 	fmt.Println("================================================================================")
 	fmt.Printf("Hardware:  %s | %s RAM | %s\n", cpu, ram, osName)
 	fmt.Printf("Go Ver:    %s\n", goVer)
@@ -71,7 +71,7 @@ func main() {
 	vehicleCounts := []int{10, 50, 100, 200}
 
 	for _, n := range vehicleCounts {
-		fmt.Printf("▶ [1/3] Benchmarking Ingestion Throughput (N=%d vehicles at 1 Hz, %d passes of %v)...\n", n, count, benchDuration)
+		fmt.Printf("[1/3] Benchmarking ingestion throughput (N=%d vehicles at 1 Hz, %d passes of %v)...\n", n, count, benchDuration)
 		for pass := 1; pass <= count; pass++ {
 			fmt.Printf("   Pass %d/%d (running 10s simulation)... ", pass, count)
 			res := runIngestion1Hz(n, benchDuration)
@@ -85,7 +85,7 @@ func main() {
 	// -------------------------------------------------------------------------
 	// 2. Command Round-Trip Latency (Cloud Dispatch -> TCP -> Vehicle -> Ack)
 	// -------------------------------------------------------------------------
-	fmt.Printf("▶ [2/3] Benchmarking Command Round-Trip Latency (ECDSA Sign + TCP + Verify + ISO-26262 + Ack)...\n")
+	fmt.Printf("[2/3] Benchmarking command round-trip latency (ECDSA sign + TCP + verify + ISO-26262 + ack)...\n")
 	for pass := 1; pass <= count; pass++ {
 		fmt.Printf("   Pass %d/%d (running 10s command loop)... ", pass, count)
 		res := runCommandLatencyBenchmark(benchDuration)
@@ -102,7 +102,7 @@ func main() {
 	// -------------------------------------------------------------------------
 	// 3. Payload Efficiency (5-byte framing + Protobuf vs HTTP + JSON)
 	// -------------------------------------------------------------------------
-	fmt.Printf("▶ [3/3] Measuring Payload Efficiency on Representative Telemetry Message...\n")
+	fmt.Printf("[3/3] Measuring payload efficiency on representative telemetry message...\n")
 	summary.Payload = measurePayload()
 	fmt.Printf("   Protobuf Wire Bytes: %d bytes (5-byte framing + binary protobuf)\n", summary.Payload.ProtoWireBytes)
 	fmt.Printf("   JSON Body Bytes:     %d bytes\n", summary.Payload.JSONBodyBytes)
@@ -114,7 +114,7 @@ func main() {
 	// Generate BENCHMARKS.md
 	// -------------------------------------------------------------------------
 	writeBenchmarkMarkdown("BENCHMARKS.md", summary, cpu, ram, osName, goVer)
-	fmt.Println("✅ Successfully recorded real benchmarks and generated BENCHMARKS.md!")
+	fmt.Println("Benchmark run complete. Updated BENCHMARKS.md.")
 }
 
 func writeBenchmarkMarkdown(filename string, s BenchmarkRunSummary, cpu, ram, osName, goVer string) {

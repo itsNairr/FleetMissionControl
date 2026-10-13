@@ -85,16 +85,16 @@ func (g *gateway) handleConnection(conn net.Conn) {
 		}
 	}()
 
-	fmt.Printf("New vehicle connected: %s\n", conn.RemoteAddr().String())
+	fmt.Printf("[Gateway] Vehicle connected from %s.\n", conn.RemoteAddr().String())
 
 	for {
 		// Read one length-prefixed, type-tagged frame
 		msgType, payload, err := wire.ReadFrame(conn)
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				fmt.Println("Vehicle disconnected cleanly.")
+				fmt.Println("[Gateway] Vehicle disconnected.")
 			} else {
-				fmt.Printf("Connection read error: %v\n", err)
+				fmt.Printf("[Gateway] Connection read error: %v\n", err)
 			}
 			return // Exit the goroutine when the vehicle disconnects
 		}
@@ -104,7 +104,7 @@ func (g *gateway) handleConnection(conn net.Conn) {
 			// Unmarshal into Protobuf struct
 			telemetry := &pb.VehicleTelemetry{}
 			if err := proto.Unmarshal(payload, telemetry); err != nil {
-				fmt.Printf("Failed to unmarshal telemetry: %v\n", err)
+				fmt.Printf("[Gateway] Telemetry unmarshal error: %v\n", err)
 				continue
 			}
 
@@ -122,13 +122,13 @@ func (g *gateway) handleConnection(conn net.Conn) {
 			}
 			resp := &pb.CommandResponse{}
 			if err := proto.Unmarshal(payload, resp); err != nil {
-				fmt.Printf("Failed to unmarshal command response: %v\n", err)
+				fmt.Printf("[Gateway] Command response unmarshal error: %v\n", err)
 				continue
 			}
 			g.dispatcher.HandleResponse(vin, resp)
 
 		default:
-			fmt.Printf("Ignoring unknown frame type %d from %s\n", msgType, conn.RemoteAddr())
+			fmt.Printf("[Gateway] Unknown frame type %d from %s ignored.\n", msgType, conn.RemoteAddr())
 		}
 	}
 
@@ -153,7 +153,7 @@ func main() {
 	//Initialize Root of Trust / Fleet ECDSA Keypair
 	privKey, _, err := crypto.EnsureFleetKeys("certs")
 	if err != nil {
-		fmt.Printf("Fatal: failed to initialize fleet crypto keys: %v\n", err)
+		fmt.Printf("[Gateway] ERROR: Failed to initialize fleet cryptographic keys: %v\n", err)
 		return
 	}
 
@@ -176,7 +176,7 @@ func main() {
 
 	go func() {
 		if err := apiServer.ListenAndServe(); err != nil {
-			fmt.Printf("API server error: %v\n", err)
+			fmt.Printf("[Gateway] API server error: %v\n", err)
 		}
 	}()
 
@@ -184,11 +184,11 @@ func main() {
 	//Setup TCP connection
 	listener, err := net.Listen("tcp", ":8080")
 	if err != nil {
-		fmt.Printf("Failed to bind to port 8080: %v\n", err)
+		fmt.Printf("[Gateway] ERROR: Failed to bind TCP listener to port 8080: %v\n", err)
 		return
 	}
 
-	fmt.Println("Gateway TCP server listening on :8080...")
+	fmt.Println("[Gateway] TCP server listening on port 8080.")
 
 	go func() { //goroutine to not run on main thread
 		for {
@@ -197,10 +197,10 @@ func main() {
 				// When we shutdown, listener.Close() is called, which causes Accept() to return net.ErrClosed.
 				// This is a normal, clean shutdown—not a crash.
 				if errors.Is(err, net.ErrClosed) {
-					fmt.Println("TCP listener closed cleanly.")
+					fmt.Println("[Gateway] TCP listener closed.")
 					return
 				}
-				fmt.Printf("Accept error: %v\n", err)
+				fmt.Printf("[Gateway] TCP accept error: %v\n", err)
 				continue
 			}
 
@@ -213,24 +213,24 @@ func main() {
 		}
 	}()
 
-	fmt.Println("Gateway running. Press Ctrl+C to shut down gracefully...")
+	fmt.Println("[Gateway] Server running. Send SIGINT or SIGTERM to stop.")
 
 	//Channel (frozen as there is not a val in sigChan)
 	sig := <-sigChan //Main freezes until Ctrl+C
-	fmt.Printf("\nReceived signal: %s. Initiating graceful shutdown...\n", sig)
+	fmt.Printf("\n[Gateway] Received signal: %s. Initiating shutdown.\n", sig)
 
 	// Shut down from the outside in: dashboards first, then vehicles, then the workers they feed
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := apiServer.Shutdown(shutdownCtx); err != nil {
-		fmt.Printf("API shutdown error: %v\n", err)
+		fmt.Printf("[Gateway] API shutdown error: %v\n", err)
 	}
 
 	listener.Close()           // Stop accepting new vehicles
 	gw.closeAllConnections()   // Disconnect existing ones and wait for their handlers to exit
 	pool.Stop()                // Now nothing can Enqueue, so draining the queue is safe
 
-	fmt.Println("Shutdown complete. Exiting cleanly.")
+	fmt.Println("[Gateway] Shutdown complete.")
 }
 
 // envOr reads an environment variable, falling back to def when unset

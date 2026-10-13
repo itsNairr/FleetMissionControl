@@ -36,7 +36,7 @@ func (r *SessionRegistry) Register(vin string, conn net.Conn) {
 	defer r.mu.Unlock() //Unlock
 	r.sessions[vin] = &Session{Conn: conn, Writer: wire.NewFrameWriter(conn)} //Add the car to the map
 	if !r.Quiet {
-		fmt.Printf("[Session] Registered %s | Active Sockets: %d\n", vin, len(r.sessions))
+		fmt.Printf("[Session] Registered session: VIN=%s, ActiveSessions=%d\n", vin, len(r.sessions))
 	}
 }
 
@@ -52,7 +52,7 @@ func (r *SessionRegistry) Unregister(vin string, conn net.Conn) bool {
 	}
 	delete(r.sessions, vin)
 	if !r.Quiet {
-		fmt.Printf("[Session] Deregistered %s | Active Sockets: %d\n", vin, len(r.sessions))
+		fmt.Printf("[Session] Deregistered session: VIN=%s, ActiveSessions=%d\n", vin, len(r.sessions))
 	}
 	return true
 }
