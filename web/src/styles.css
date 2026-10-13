@@ -216,9 +216,14 @@ small { font-size: 0.55em; font-weight: 500; letter-spacing: 0; margin-left: 2px
 .status-strip { display: flex; gap: 6px; margin: 0; padding: 0; list-style: none; flex: 1; flex-wrap: wrap; }
 .strip-chip {
   display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px 4px 4px; border-radius: var(--radius-pill);
-  background: var(--well); font-size: 13px; font-weight: 600;
+  background: var(--well);
 }
-.strip-label { font-weight: 400; color: var(--ink-2); font-size: 12px; }
+.strip-chip .status-icon { flex-shrink: 0; }
+.strip-text {
+  display: inline-flex; align-items: baseline; gap: 5px; line-height: 1;
+}
+.strip-chip .num { font-size: 13px; font-weight: 600; line-height: 1; }
+.strip-label { font-weight: 400; color: var(--ink-2); font-size: 12px; line-height: 1; }
 .topbar-end { display: flex; align-items: center; gap: 10px; }
 .segmented { display: inline-flex; padding: 3px; border-radius: var(--radius-pill); background: var(--well); }
 .segmented button {

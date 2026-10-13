@@ -44,8 +44,10 @@ export function TopBar({ vehicles, alertVins, alertCount, link, theme, onToggleT
         {STATUS_ORDER.filter((s) => s !== 'offline' || counts.offline > 0).map((s) => (
           <li key={s} className={`strip-chip strip-${s}`} title={STATUS_META[s].label}>
             <StatusIcon status={s} size={12} />
-            <span className="num">{counts[s]}</span>
-            <span className="strip-label">{STATUS_META[s].label}</span>
+            <span className="strip-text">
+              <span className="num">{counts[s]}</span>
+              <span className="strip-label">{STATUS_META[s].label}</span>
+            </span>
           </li>
         ))}
       </ul>
