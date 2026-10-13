@@ -1,6 +1,6 @@
 # Rivian-Inspired Fleet Mission Control HMI
 
-[![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://golang.org)
+[![Go](https://img.shields.io/badge/Go-1.27+-00ADD8?style=flat&logo=go)](https://golang.org)
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6?style=flat&logo=typescript)](https://www.typescriptlang.org)
 [![Protocol Buffers](https://img.shields.io/badge/Protobuf-v3-4285F4?style=flat&logo=google)](https://protobuf.dev)
@@ -24,7 +24,7 @@ This platform implements the full operational lifecycle:
 ```
                       ┌──────────────────────────────────────────────┐
                       │          Vehicle Fleet Simulator             │
-                      │  • 14 Real-world EV Archetypes               │
+                      │  • 9 Real-world EV Models                    │
                       │  • California OSRM/OSM Road Following        │
                       │  • ISO-26262 Functional Safety Interlocks    │
                       └───────┬──────────────────────────────▲───────┘
@@ -97,7 +97,7 @@ This format minimizes serialization overhead. A single TCP socket handles teleme
 
 ### 4. Road-Following Fleet Simulator
 * Vehicles follow realistic road coordinates in California (San Francisco, Silicon Valley, Monterey, and Lake Tahoe) mapped with OSRM and OpenStreetMap.
-* The engine simulates 14 vehicle operational profiles with dynamic physics:
+* The engine simulates 9 EV vehicle models across realistic operational profiles with dynamic physics:
   * Highway cruising and urban traffic with regenerative braking.
   * Heavy towing and cold-weather operation.
   * Direct current (DC) fast charging with automated current tapering above 80% state of charge.
@@ -115,7 +115,7 @@ This format minimizes serialization overhead. A single TCP socket handles teleme
 
 ## Tech Stack
 
-* **Backend:** Go 1.24+ (`net`, `sync`, `crypto/ecdsa`, goroutines, channels)
+* **Backend:** Go 1.27+ (`net`, `sync`, `crypto/ecdsa`, goroutines, channels)
 * **Serialization:** Google Protocol Buffers (`proto3`)
 * **Transport:** Length-prefixed TCP sockets, WebSockets, HTTP REST
 * **Frontend:** React 18, TypeScript, Vite, Vanilla CSS Design System
@@ -127,7 +127,7 @@ This format minimizes serialization overhead. A single TCP socket handles teleme
 ## Running Locally
 
 ### Prerequisites
-* **Go** (version 1.24 or newer)
+* **Go** (version 1.27 or newer)
 * **Bun** (or Node.js 18+ and npm)
 
 ### 1. Clone the Repository

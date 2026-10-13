@@ -120,7 +120,7 @@ func main() {
 func writeBenchmarkMarkdown(filename string, s BenchmarkRunSummary, cpu, ram, osName, goVer string) {
 	var sb strings.Builder
 
-	sb.WriteString("# Fleet Mission Control — Performance Benchmarks\n\n")
+	sb.WriteString("# Performance Benchmarks\n\n")
 	sb.WriteString("Every figure in this document was directly measured on this machine using Go automated test benchmarks (`testing.B` and in-process network harness). No figures are estimated or simulated.\n\n")
 
 	sb.WriteString("## Benchmark Environment\n\n")
@@ -133,7 +133,7 @@ func writeBenchmarkMarkdown(filename string, s BenchmarkRunSummary, cpu, ram, os
 
 	// Table 1: Ingestion Throughput
 	sb.WriteString("## 1. Ingestion Throughput & Worker Pool Capacity\n\n")
-	sb.WriteString("Simulated vehicles stream telemetry at **1 Hz** over dedicated, persistent TCP sockets using 5-byte length-prefixed binary Protocol Buffer frames. The gateway concurrently reads frames, unmarshals protobuf messages, maintains in-memory digital twins, evaluates anomaly rules, and enqueues jobs to a 10-worker pool (`internal/worker`).\n\n")
+	sb.WriteString("Simulated vehicles across 9 protobuf-defined EV models stream telemetry at **1 Hz** over dedicated, persistent TCP sockets using 5-byte length-prefixed binary Protocol Buffer frames. The gateway concurrently reads frames, unmarshals protobuf messages, maintains in-memory digital twins, evaluates anomaly rules, and enqueues jobs to a 10-worker pool (`internal/worker`).\n\n")
 
 	sb.WriteString("| Benchmark Name | Connected Vehicles (N) | Stream Rate | Measured Throughput (msgs/sec) | Worker Pool Capacity | Peak Queue Depth | Dropped Messages | Frame Delivery Rate |\n")
 	sb.WriteString("| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |\n")

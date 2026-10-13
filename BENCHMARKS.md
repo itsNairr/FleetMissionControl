@@ -14,7 +14,7 @@ Every figure in this document was directly measured on this machine using Go aut
 
 ## 1. Ingestion Throughput & Worker Pool Capacity
 
-Simulated vehicles stream telemetry at **1 Hz** over dedicated, persistent TCP sockets using 5-byte length-prefixed binary Protocol Buffer frames. The gateway concurrently reads frames, unmarshals protobuf messages, maintains in-memory digital twins, evaluates anomaly rules, and enqueues jobs to a 10-worker pool (`internal/worker`).
+Simulated vehicles across 9 protobuf-defined EV models stream telemetry at **1 Hz** over dedicated, persistent TCP sockets using 5-byte length-prefixed binary Protocol Buffer frames. The gateway concurrently reads frames, unmarshals protobuf messages, maintains in-memory digital twins, evaluates anomaly rules, and enqueues jobs to a 10-worker pool (`internal/worker`).
 
 | Benchmark Name | Connected Vehicles (N) | Stream Rate | Measured Throughput (msgs/sec) | Worker Pool Capacity | Peak Queue Depth | Dropped Messages | Frame Delivery Rate |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
