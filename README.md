@@ -1,4 +1,4 @@
-# Rivian Mission Control HMI
+# Rivian-Inspired Fleet Mission Control HMI
 
 [![Go](https://img.shields.io/badge/Go-1.24+-00ADD8?style=flat&logo=go)](https://golang.org)
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react)](https://react.dev)
@@ -7,15 +7,15 @@
 [![Three.js](https://img.shields.io/badge/Three.js-WebGL-black?style=flat&logo=three.js)](https://threejs.org)
 [![Vite](https://img.shields.io/badge/Vite-6.x-646CFF?style=flat&logo=vite)](https://vitejs.dev)
 
-Fleet Mission Control is a real-time connected vehicle telemetry and remote operations platform built with Go, React, and Three.js.
+Fleet Mission Control is a real-time connected vehicle telemetry and remote operations platform. The system is built with Go, React, and Three.js.
 
-Modern electric vehicles stream thousands of sensor updates every second, from battery pack temperatures and inverter currents to tire pressures and GPS coordinates. At the same time, fleet operators need to send commands back to vehicles safely, securely, and with sub-second feedback.
+Electric vehicles send continuous sensor data, including battery temperatures, inverter current, tire pressures, and GPS coordinates. Fleet operators must also send remote commands to vehicles safely and receive prompt feedback.
 
-I built this project to model that full lifecycle end to end:
-1. **Telemetry Ingestion:** Cars stream binary Protocol Buffer frames over persistent TCP connections into a concurrent Go worker pool and in-memory digital twin.
-2. **Cryptographic Dispatch:** The cloud gateway signs outbound commands with ECDSA keys, and the vehicle ECU validates timestamps and nonces before execution.
-3. **Automotive Safety:** An onboard safety layer enforces ISO-26262 interlocks, rejecting dangerous commands like opening the frunk or tailgate while driving.
-4. **Mission Control Dashboard:** A clean operations interface with real-time California road tracking, live alerts, and an interactive 3D digital twin inspired by Rivian OS.
+This platform implements the full operational lifecycle:
+1. **Telemetry Ingestion:** Vehicles send binary Protocol Buffer frames across persistent TCP connections to a concurrent Go worker pool and digital twin cache.
+2. **Cryptographic Dispatch:** The gateway signs outgoing commands with an ECDSA private key. The vehicle Electronic Control Unit (ECU) verifies signatures, timestamps, and nonces before execution.
+3. **Automotive Safety:** An onboard safety layer enforces ISO-26262 interlocks. It rejects dangerous commands, such as opening cargo doors while the vehicle moves.
+4. **Mission Control Dashboard:** A web interface displays real-time vehicle positions on California road networks, active diagnostic alerts, and an interactive 3D digital twin.
 
 ---
 
@@ -29,7 +29,7 @@ I built this project to model that full lifecycle end to end:
                       │  • ISO-26262 Functional Safety Interlocks    │
                       └───────┬──────────────────────────────▲───────┘
                               │                              │
-         [Telemetry Stream]   │ Length-Prefixed TCP Stream   │ [Command Highway]
+         [Telemetry Stream]   │ Length-Prefixed TCP Stream   │ [Command Channel]
          Binary Protobuf      │ [len][type][payload]         │ ECDSA Signed Commands
                               ▼                              │
                       ┌──────────────────────────────────────┴───────┐
@@ -42,9 +42,9 @@ I built this project to model that full lifecycle end to end:
                               ▼                              │
                       ┌──────────────────────┐               │
                       │ TelemetryWorkerPool  │               │
-                      │ • Channel queue      │               │
+                      │ • Bounded queue      │               │
                       │ • Rules engine       │               │
-                      │ • Digital Twin cache │               │
+                      │ • Digital twin cache │               │
                       └───────┬──────────────┘               │
                               │                              │
                               ▼                              │
@@ -58,66 +58,69 @@ I built this project to model that full lifecycle end to end:
                               ▼                              │
                       ┌──────────────────────────────────────┴───────┐
                       │             Mission Control HMI              │
-                      │  • Live Leaflet Road Fleet Map               │
+                      │  • Live Leaflet Fleet Map                    │
                       │  • Interactive 3D WebGL Digital Twin         │
-                      │  • Rivian OS Telemetry & Arc Gauges          │
-                      │  • Optimistic Remote Actuation Hotspots      │
+                      │  • Telemetry Indicators & Arc Gauges         │
+                      │  • Actuator Hotspots with Interlock Feedback │
                       └──────────────────────────────────────────────┘
 ```
 
 ---
 
-## How It Works Under the Hood
+## Technical Description
 
-### 1. Binary Wire Framing over Raw TCP
-Instead of sending bulky JSON payloads over HTTP, vehicles maintain a persistent TCP socket to the gateway.
+### 1. Binary Wire Framing Across Raw TCP
+Vehicles maintain persistent TCP connections to the gateway instead of sending JSON over HTTP.
 
-To prevent TCP stream fragmentation and packet coalescing under load, every frame uses a compact 5-byte header:
-* `[4 bytes]`: Big-endian payload length
-* `[1 byte]`: Message type (`0x01` for Telemetry, `0x02` for Command, `0x03` for Command Ack)
+To prevent TCP stream fragmentation and packet coalescing during high network traffic, every frame contains a 5-byte header:
+* `[4 bytes]`: Big-endian payload length (integer)
+* `[1 byte]`: Message type identifier (`0x01` = Telemetry, `0x02` = Command, `0x03` = Command Acknowledgment)
 * `[N bytes]`: Google Protocol Buffers binary payload
 
-This keeps serialization overhead minimal and lets a single socket handle telemetry streaming, cloud commands, and acknowledgments simultaneously.
+This format minimizes serialization overhead. A single TCP socket handles telemetry streams, remote commands, and acknowledgments concurrently.
 
 ### 2. Concurrent Worker Pool and Thread-Safe Digital Twins
-* **Worker Pool:** Ingestion runs through an actor-style worker pool with bounded Go channels. If a spike in traffic occurs, non-blocking select statements shed backpressure safely instead of overwhelming the server.
-* **In-Memory Digital Twin:** A thread-safe state registry guarded by `sync.RWMutex` caches the latest snapshot for every vehicle, giving the WebSocket server zero-allocation read access.
-* **Live Rules Engine:** As telemetry arrives, a rules engine checks for anomalies on every tick:
-  * Battery thermal runaway (pack temperature exceeding 55°C)
-  * Voltage imbalance (cell delta greater than 0.1V)
-  * Speed governor violations and low tire pressure (TPMS) alerts
+* **Worker Pool:** Ingestion workers process incoming telemetry from bounded Go channels. When channel capacity fills, non-blocking select statements drop excess packets to prevent gateway memory exhaustion.
+* **In-Memory Digital Twin:** A thread-safe registry guarded by `sync.RWMutex` caches the latest state snapshot for each vehicle. The WebSocket server reads this cache without memory allocations.
+* **Rules Engine:** When telemetry arrives, the rules engine checks for anomalies on each update cycle:
+  * High battery pack temperature (temperature exceeds 55°C).
+  * Cell voltage imbalance (voltage difference between cells exceeds 0.1V).
+  * Speed limit violations and low tire pressure (TPMS) warnings.
 
 ### 3. Cryptographic Commands and ISO-26262 Safety
-* **ECDSA Command Signatures:** When an operator clicks a button, the gateway signs the payload using an ECDSA private key (`secp256r1` with SHA-256). The vehicle verifies the signature against the server's public key before touching hardware actuators.
-* **Replay Protection:** Commands include a monotonic nonce and Unix timestamp. Vehicles reject anything outside a strict 5-second window.
-* **Safety Interlocks:** Real cars have hard safety limits. The simulator enforces ISO-26262 interlocks:
-  * Rejects opening the frunk or tailgate if ground speed is above 0 km/h
-  * Rejects shifting out of park while charging
-  * Permits safe actions (like setting a speed limit governor) and synchronizes telemetry immediately
+* **ECDSA Command Signatures:** When an operator sends a command, the gateway signs the payload with an ECDSA private key (`secp256r1` curve with SHA-256). The vehicle verifies the signature with the public key before it triggers vehicle actuators.
+* **Replay Protection:** Each command contains a strictly increasing nonce and a Unix timestamp. The vehicle rejects any command received outside a 5-second validity window.
+* **Safety Interlocks:** The simulator enforces functional safety rules based on ISO-26262 principles:
+  * Rejects commands to open the front trunk or tailgate when ground speed exceeds 0 km/h.
+  * Rejects commands to shift out of Park while the vehicle is charging.
+  * Executes safe actions (such as setting a speed limit governor) and synchronizes telemetry immediately.
 
 ### 4. Road-Following Fleet Simulator
-* Vehicles drive along real California routes (San Francisco, Silicon Valley, Monterey, and Lake Tahoe) mapped with OSRM and OpenStreetMap coordinates.
-* 14 distinct scenarios are simulated with realistic physics, including highway driving, stop-and-go urban commutes with regenerative braking, heavy towing, cold winter soak, and DC fast supercharging (complete with automated 80% charging knee transitions).
+* Vehicles follow realistic road coordinates in California (San Francisco, Silicon Valley, Monterey, and Lake Tahoe) mapped with OSRM and OpenStreetMap.
+* The engine simulates 14 vehicle operational profiles with dynamic physics:
+  * Highway cruising and urban traffic with regenerative braking.
+  * Heavy towing and cold-weather operation.
+  * Direct current (DC) fast charging with automated current tapering above 80% state of charge.
 
 ### 5. Mission Control HMI and 3D Digital Twin
-* **Rivian OS Design:** Clean typography, Day and Night adaptive themes, a live speed and power arc gauge showing draw and regen, and a battery state-of-charge pill.
-* **3D WebGL Vehicle Model (React Three Fiber):**
-  * Wheels spin in real time based on live telemetry speed
-  * Cargo doors animate open and closed
-  * Clickable 3D hotspots allow operators to toggle locks, frunks, and tailgates directly on the car model
-* **Optimistic UI Updates:** Actuator buttons highlight immediately when clicked, rolling back cleanly if the vehicle rejects the command due to a safety interlock.
-* **Unit System Toggle:** Seamless switching between imperial and metric units (mph/km/h, mi/km, °F/°C, psi/bar).
+* **HMI Design System:** Clean operational interface with Day and Night modes, speed and power arc gauges, and battery state-of-charge indicators.
+* **3D Digital Twin (React Three Fiber and Three.js):**
+  * Wheel rotation speed synchronizes with real-time telemetry speed.
+  * Doors and cargo lids animate open and closed.
+  * Clickable 3D hotspots allow operators to command door locks, the front trunk, and the tailgate directly on the vehicle model.
+* **Optimistic UI Updates:** Actuator buttons indicate pending state immediately upon click. If the vehicle safety layer rejects the command, the interface reverts to the confirmed vehicle state.
+* **Unit Conversion:** The user interface converts between imperial and metric units (mph and km/h, mi and km, °F and °C, psi and bar).
 
 ---
 
 ## Tech Stack
 
-* **Backend:** Go 1.24+ (Goroutines, Channels, `net`, `sync`, `crypto/ecdsa`)
+* **Backend:** Go 1.24+ (`net`, `sync`, `crypto/ecdsa`, goroutines, channels)
 * **Serialization:** Google Protocol Buffers (`proto3`)
-* **Transport:** Length-Prefixed TCP Sockets, WebSockets, HTTP REST
+* **Transport:** Length-prefixed TCP sockets, WebSockets, HTTP REST
 * **Frontend:** React 18, TypeScript, Vite, Vanilla CSS Design System
 * **3D Visualizations:** Three.js, React Three Fiber, Drei
-* **Maps & Geo:** Leaflet, OpenStreetMap, OSRM
+* **Mapping:** Leaflet, OpenStreetMap, OSRM
 
 ---
 
@@ -127,27 +130,27 @@ This keeps serialization overhead minimal and lets a single socket handle teleme
 * **Go** (version 1.24 or newer)
 * **Bun** (or Node.js 18+ and npm)
 
-### 1. Clone the Repo
+### 1. Clone the Repository
 ```bash
 git clone https://github.com/itsnairr/FleetMissionControl.git
 cd FleetMissionControl
 ```
 
 ### 2. Start the Gateway Server
-The gateway sets up the cryptographic keys, listens for vehicle TCP connections on port 8080, and starts the HTTP/WebSocket API on port 8081:
+The gateway generates ECDSA keys, accepts vehicle TCP connections on port 8080, and serves the HTTP and WebSocket API on port 8081:
 ```bash
 go run ./cmd/gateway
 ```
 
-### 3. Launch the Vehicle Simulator
-In another terminal, spin up simulated vehicles driving along California roads:
+### 3. Start the Vehicle Simulator
+Open a second terminal window. Start the simulator to generate connected vehicles driving on California routes:
 ```bash
-# Spawns 10 concurrent connected electric vehicles
+# Starts 10 concurrent simulated vehicles
 go run ./cmd/simulator -n 10
 ```
 
 ### 4. Start the Web Dashboard
-In a third terminal, launch the Mission Control interface:
+Open a third terminal window. Install dependencies and start the development server:
 ```bash
 cd web
 bun install     # or npm install
@@ -158,14 +161,14 @@ Open **`http://localhost:5173`** in your browser.
 
 ---
 
-## Testing & Quality
+## Testing and Quality Verification
 
-Run the Go unit and integration tests (covers framing, cryptographic verification, dispatching, and API handlers):
+Run the Go unit and integration tests to verify framing, cryptographic signatures, command dispatching, and API endpoints:
 ```bash
 go test -v ./...
 ```
 
-Verify frontend TypeScript types and build the production bundle:
+Verify frontend TypeScript types and compile the production build:
 ```bash
 cd web
 bun run build
@@ -173,17 +176,20 @@ bun run build
 
 ---
 
-## API Summary
+## API Reference
 
 ### REST Endpoints
-* `GET /api/v1/vehicles`: Snapshot of all known vehicles with online status.
-* `GET /api/v1/vehicles/{vin}`: Full telemetry state for a specific vehicle.
-* `POST /api/v1/vehicles/{vin}/command`: Dispatches a signed command to the vehicle and waits up to 3 seconds for the vehicle's verdict (`200 OK` on accept/reject with reason, `503` if offline, `504` on timeout).
+* `GET /api/v1/vehicles`: Returns a snapshot of all registered vehicles with online status.
+* `GET /api/v1/vehicles/{vin}`: Returns current telemetry data for the specified Vehicle Identification Number (VIN).
+* `POST /api/v1/vehicles/{vin}/command`: Transmits a cryptographically signed command to the vehicle. The gateway waits up to 3 seconds for the vehicle response:
+  * `200 OK`: Command accepted or rejected by vehicle safety logic (the response body contains the verdict and reason).
+  * `503 Service Unavailable`: Target vehicle is offline.
+  * `504 Gateway Timeout`: Target vehicle did not reply within 3 seconds.
 
 ### WebSocket Streams
-* `WS /api/v1/fleet/stream`: Live stream of twin state updates across the entire fleet.
-* `WS /api/v1/vehicles/{vin}/stream`: High-frequency updates for a single selected vehicle.
-* `WS /api/v1/alerts/stream`: Real-time fleet alerts generated by the rules engine and vehicle DTC codes.
+* `WS /api/v1/fleet/stream`: Streams continuous digital twin state updates for all vehicles in the fleet.
+* `WS /api/v1/vehicles/{vin}/stream`: Streams high-frequency telemetry for one selected vehicle.
+* `WS /api/v1/alerts/stream`: Streams alerts generated by the rules engine and vehicle Diagnostic Trouble Codes (DTC).
 
 ---
 
@@ -219,7 +225,7 @@ FleetMissionControl/
     │   ├── hooks/              # useFleet, useCommands, useAlerts, useTheme
     │   ├── lib/                # Closures, units, model registries, optimistic updates
     │   └── three/              # Three.js / React Three Fiber 3D digital twin
-    └── styles.css              # Rivian OS-inspired design system
+    └── styles.css              # Mission Control design system
 ```
 
 ---
@@ -229,3 +235,4 @@ FleetMissionControl/
 * 3D Car Models: [Car Kit 3.1](https://kenney.nl/assets/car-kit) by Kenney ([CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)).
 * Map Tiles: © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors.
 * Road Networks: Generated using [OSRM](https://project-osrm.org).
+
