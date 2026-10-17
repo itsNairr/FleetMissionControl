@@ -159,6 +159,10 @@ type SimulatedVehicle struct {
 	TailgateOpen bool
 	TrunkOpen    bool
 	Quiet        bool // If true, suppresses console output (useful in benchmarks)
+
+	LifecycleFSM *FSM[Scenario, LifecycleEvent, *SimulatedVehicle]
+	FrunkFSM     *FSM[ClosureState, ClosureEvent, *SimulatedVehicle]
+	TailgateFSM  *FSM[ClosureState, ClosureEvent, *SimulatedVehicle]
 }
 
 // Creates the simulated car and returns the address
@@ -218,6 +222,18 @@ func NewSimulatedVehicle(vin string, model pb.VehicleModel, scenario Scenario) *
 	case ScenarioAuxBatterySag:
 		v.Aux12VVolts = 10.8 // Dying low-voltage battery
 	}
+
+	frunkState := ClosureStateLatched
+	if v.FrunkOpen {
+		frunkState = ClosureStateOpen
+	}
+	tailgateState := ClosureStateLatched
+	if v.TailgateOpen {
+		tailgateState = ClosureStateOpen
+	}
+	v.LifecycleFSM = NewVehicleLifecycleFSM(scenario)
+	v.FrunkFSM = NewClosureSafetyFSM(frunkState, "frunk")
+	v.TailgateFSM = NewClosureSafetyFSM(tailgateState, "tailgate")
 
 	v.syncPosition()
 	return v
@@ -458,43 +474,42 @@ func (v *SimulatedVehicle) ToTelemetry() *pb.VehicleTelemetry {
 // UpdateLifecycle evaluates autonomous state transitions based on battery SoC and vehicle physics.
 // Caller must hold v.mu (it's invoked from inside Tick).
 func (v *SimulatedVehicle) UpdateLifecycle() {
-	switch v.Scenario {
-	case ScenarioHighwayCruising, ScenarioHeavyTowing, ScenarioUrbanCommute:
-		// 1. Critical battery depletion -> Turtle Mode
+	if v.LifecycleFSM == nil {
+		return
+	}
+
+	switch v.LifecycleFSM.Current() {
+	case ScenarioHighwayCruising, ScenarioHeavyTowing, ScenarioUrbanCommute, ScenarioOffRoadAdventure, ScenarioDeliveryStopCycle:
+		// 1. Critical battery depletion -> Turtle Mode (SoC <= 5%)
 		if v.BatterySoC <= 5.0 {
-			if !v.Quiet {
-				fmt.Printf("[%s] WARNING: Battery state of charge critical (%.1f%%). Throttling power output to low battery mode.\n", v.Vin, v.BatterySoC)
-			}
-			v.Scenario = ScenarioLowBatteryTurtle
-			v.CurrentSpeed = 25.0
+			_ = v.LifecycleFSM.Trigger(EventCriticalBatteryDepletion, v)
 			return
 		}
 
-		// 2. Low battery reserve -> Pull into Supercharger stall
+		// 2. Low battery reserve -> Route to Supercharger (SoC <= 15%)
 		if v.BatterySoC <= 15.0 {
-			if !v.Quiet {
-				fmt.Printf("[%s] NOTICE: Battery state of charge low (%.1f%%). Routing to charging station.\n", v.Vin, v.BatterySoC)
-			}
-			v.Scenario = ScenarioSupercharging
-			v.CurrentSpeed = 0.0
+			_ = v.LifecycleFSM.Trigger(EventLowBatteryReserve, v)
 			return
 		}
 
 	case ScenarioSupercharging:
-		// 3. Fast charge taper knee reached -> Resume highway journey
+		// 3. Fast charge taper knee reached -> Resume highway journey (SoC >= 80%)
 		if v.BatterySoC >= 80.0 {
-			if !v.Quiet {
-				fmt.Printf("[%s] NOTICE: DC fast charge reached 80.0%% (%.1f%%). Disconnecting charger and resuming highway cruising.\n", v.Vin, v.BatterySoC)
-			}
-			v.Scenario = ScenarioHighwayCruising
-			v.CurrentSpeed = 110.0
+			_ = v.LifecycleFSM.Trigger(EventFastChargeTaperReached, v)
+			return
+		}
+
+	case ScenarioACCharging:
+		// 4. Level 2 AC charge cycle finished (SoC >= 100%)
+		if v.BatterySoC >= 100.0 {
+			_ = v.LifecycleFSM.Trigger(EventFullChargeReached, v)
 			return
 		}
 
 	case ScenarioLowBatteryTurtle:
-		// If emergency charging occurs or SoC drops to 0
+		// 5. Total depletion -> Stop vehicle
 		if v.BatterySoC <= 0.0 {
-			v.CurrentSpeed = 0.0
+			_ = v.LifecycleFSM.Trigger(EventBatteryExhausted, v)
 		}
 	}
 }
@@ -506,7 +521,12 @@ func (v *SimulatedVehicle) ExecuteCommand(cmd VehicleCommand) error {
 
 	switch cmd {
 	case CommandOpenFrunk:
-		// ISO-26262 interlock check
+		if v.FrunkFSM != nil {
+			if err := v.FrunkFSM.Trigger(ClosureEventUnlatch, v); err != nil {
+				return ErrFrunkHazardInMotion
+			}
+			return nil
+		}
 		if v.CurrentSpeed > 0 {
 			return ErrFrunkHazardInMotion
 		}
@@ -514,11 +534,20 @@ func (v *SimulatedVehicle) ExecuteCommand(cmd VehicleCommand) error {
 		return nil
 
 	case CommandCloseFrunk:
+		if v.FrunkFSM != nil {
+			_ = v.FrunkFSM.Trigger(ClosureEventLatch, v)
+			return nil
+		}
 		v.FrunkOpen = false
 		return nil
 
 	case CommandOpenTailgate:
-		// Interlock check
+		if v.TailgateFSM != nil {
+			if err := v.TailgateFSM.Trigger(ClosureEventUnlatch, v); err != nil {
+				return ErrTailgateHazardInMotion
+			}
+			return nil
+		}
 		if v.CurrentSpeed > 0 {
 			return ErrTailgateHazardInMotion
 		}
@@ -526,6 +555,10 @@ func (v *SimulatedVehicle) ExecuteCommand(cmd VehicleCommand) error {
 		return nil
 
 	case CommandCloseTailgate:
+		if v.TailgateFSM != nil {
+			_ = v.TailgateFSM.Trigger(ClosureEventLatch, v)
+			return nil
+		}
 		v.TailgateOpen = false
 		return nil
 
@@ -571,36 +604,56 @@ func (v *SimulatedVehicle) ExecuteProtoCommand(cmd *pb.VehicleCommand, pubKey *e
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_OPEN_FRUNK:
-		if v.CurrentSpeed > 0 {
-			return ErrFrunkHazardInMotion
+		if v.FrunkFSM != nil {
+			if err := v.FrunkFSM.Trigger(ClosureEventUnlatch, v); err != nil {
+				return ErrFrunkHazardInMotion
+			}
+		} else {
+			if v.CurrentSpeed > 0 {
+				return ErrFrunkHazardInMotion
+			}
+			v.FrunkOpen = true
 		}
-		v.FrunkOpen = true
 		if !v.Quiet {
 			fmt.Printf("[%s] Front trunk opened by cloud command.\n", v.Vin)
 		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_CLOSE_FRUNK:
-		v.FrunkOpen = false
+		if v.FrunkFSM != nil {
+			_ = v.FrunkFSM.Trigger(ClosureEventLatch, v)
+		} else {
+			v.FrunkOpen = false
+		}
 		if !v.Quiet {
 			fmt.Printf("[%s] Front trunk closed by cloud command.\n", v.Vin)
 		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_OPEN_TRUNK:
-		if v.CurrentSpeed > 0 {
-			return ErrTailgateHazardInMotion
+		if v.TailgateFSM != nil {
+			if err := v.TailgateFSM.Trigger(ClosureEventUnlatch, v); err != nil {
+				return ErrTailgateHazardInMotion
+			}
+		} else {
+			if v.CurrentSpeed > 0 {
+				return ErrTailgateHazardInMotion
+			}
+			v.TrunkOpen = true
+			v.TailgateOpen = true
 		}
-		v.TrunkOpen = true
-		v.TailgateOpen = true
 		if !v.Quiet {
 			fmt.Printf("[%s] Trunk opened by cloud command.\n", v.Vin)
 		}
 		return nil
 
 	case pb.CommandType_COMMAND_TYPE_CLOSE_TRUNK:
-		v.TrunkOpen = false
-		v.TailgateOpen = false
+		if v.TailgateFSM != nil {
+			_ = v.TailgateFSM.Trigger(ClosureEventLatch, v)
+		} else {
+			v.TrunkOpen = false
+			v.TailgateOpen = false
+		}
 		if !v.Quiet {
 			fmt.Printf("[%s] Trunk closed by cloud command.\n", v.Vin)
 		}
