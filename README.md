@@ -14,7 +14,7 @@ Electric vehicles send continuous sensor data, including battery temperatures, i
 This platform implements the full operational lifecycle:
 1. **Telemetry Ingestion:** Vehicles send binary Protocol Buffer frames across persistent TCP connections to a concurrent Go worker pool and digital twin cache.
 2. **Cryptographic Dispatch:** The gateway signs outgoing commands with an ECDSA private key. The vehicle Electronic Control Unit (ECU) verifies signatures, timestamps, and nonces before execution.
-3. **Automotive Safety:** An onboard safety layer enforces ISO-26262 interlocks. It rejects dangerous commands, such as opening cargo doors while the vehicle moves.
+3. **Finite State Machines & Safety:** An onboard generic FSM engine manages autonomous vehicle operational lifecycles and enforces ISO-26262 ASIL-B interlocks (e.g., rejecting attempts to unlatch cargo lids while in motion).
 4. **Mission Control Dashboard:** A web interface displays real-time vehicle positions on California road networks, active diagnostic alerts, and an interactive 3D digital twin.
 
 ---
@@ -26,6 +26,7 @@ This platform implements the full operational lifecycle:
                       │          Vehicle Fleet Simulator             │
                       │  • 9 Real-world EV Models                    │
                       │  • California OSRM/OSM Road Following        │
+                      │  • Finite State Machine (FSM) Lifecycle      │
                       │  • ISO-26262 Functional Safety Interlocks    │
                       └───────┬──────────────────────────────▲───────┘
                               │                              │
@@ -91,18 +92,79 @@ This format minimizes serialization overhead. A single TCP socket handles teleme
 * **ECDSA Command Signatures:** When an operator sends a command, the gateway signs the payload with an ECDSA private key (`secp256r1` curve with SHA-256). The vehicle verifies the signature with the public key before it triggers vehicle actuators.
 * **Replay Protection:** Each command contains a strictly increasing nonce and a Unix timestamp. The vehicle rejects any command received outside a 5-second validity window.
 * **Safety Interlocks:** The simulator enforces functional safety rules based on ISO-26262 principles:
-  * Rejects commands to open the front trunk or tailgate when ground speed exceeds 0 km/h.
+  * Rejects commands to open the front trunk or tailgate when ground speed exceeds 0 km/h via closure safety FSM guards.
   * Rejects commands to shift out of Park while the vehicle is charging.
   * Executes safe actions (such as setting a speed limit governor) and synchronizes telemetry immediately.
 
-### 4. Road-Following Fleet Simulator
+### 4. Finite State Machines (FSM) & Autonomous Lifecycles
+The vehicle simulator embeds a generic, type-safe Finite State Machine engine (`internal/simulator/fsm.go`) that governs vehicle operational lifecycles and actuator safety:
+* **Generic State Machine:** Go parameterized type `FSM[S, E, C]` with thread-safe transition maps (`sync.RWMutex`), `GuardFunc` predicate validators, and `ActionFunc` callbacks for side-effects.
+* **Autonomous Operational Lifecycle:** Evaluates real-time battery electrochemistry and vehicle physics:
+  * Reroutes driving vehicles (`HIGHWAY_CRUISING`, `URBAN_COMMUTE`, `HEAVY_TOWING`) to `SUPERCHARGING` when battery SoC drops $\le 15\%$.
+  * Tapers current at 80% SoC, disconnects charger, and resumes `HIGHWAY_CRUISING` at 110 km/h.
+  * Throttles power output to `TURTLE_MODE` (capped at 25 km/h) if battery SoC drops $\le 5\%$.
+  * Transitions `AC_CHARGING` to `PARKED_SENTRY` upon reaching 100% full charge.
+* **ISO-26262 ASIL-B Closure Safety FSM:** Closures (`frunk`, `tailgate`) operate as state machines with speed-gated guards that reject unlatching commands whenever ground speed exceeds 0 km/h.
+* **Diagnostic Audit History:** Every state change is recorded into a ring buffer with timestamps, prior state, event, new state, and reason.
+
+#### Operational Lifecycle FSM Diagram
+```mermaid
+stateDiagram-v2
+    [*] --> HIGHWAY_CRUISING
+    [*] --> URBAN_COMMUTE
+    [*] --> PARKED_SENTRY
+
+    state "Active Driving States" as Driving {
+        HIGHWAY_CRUISING
+        URBAN_COMMUTE
+        HEAVY_TOWING
+        OFF_ROAD
+        DELIVERY_CYCLE
+    }
+
+    Driving --> SUPERCHARGING: SoC <= 15% (Low Battery Reserve)
+    Driving --> TURTLE_MODE: SoC <= 5% (Critical Depletion)
+
+    SUPERCHARGING --> HIGHWAY_CRUISING: SoC >= 80% (Fast Charge Taper Reached)
+    
+    PARKED_SENTRY --> AC_CHARGING: Connect AC L2 Cable
+    AC_CHARGING --> PARKED_SENTRY: SoC = 100% (Full Charge Reached)
+    
+    TURTLE_MODE --> PARKED_SENTRY: SoC = 0% (Battery Exhausted)
+
+    note right of SUPERCHARGING
+        Speed: 0 km/h
+        Charge Power: ~210 kW
+        Latch Engaged: True
+    end note
+
+    note right of TURTLE_MODE
+        Speed: <= 25 km/h
+        Power Throttled
+    end note
+```
+
+#### ISO-26262 Closure Safety FSM Diagram
+```mermaid
+stateDiagram-v2
+    direction LR
+    
+    [*] --> LATCHED
+    
+    LATCHED --> OPEN: UNLATCH [Guard: Speed == 0 km/h]
+    OPEN --> LATCHED: LATCH [Any Speed]
+    
+    LATCHED --> LATCHED: UNLATCH [Guard: Speed > 0 km/h] (Rejected: ISO-26262 Hazard)
+```
+
+### 5. Road-Following Fleet Simulator
 * Vehicles follow realistic road coordinates in California (San Francisco, Silicon Valley, Monterey, and Lake Tahoe) mapped with OSRM and OpenStreetMap.
 * The engine simulates 9 EV vehicle models across realistic operational profiles with dynamic physics:
   * Highway cruising and urban traffic with regenerative braking.
   * Heavy towing and cold-weather operation.
   * Direct current (DC) fast charging with automated current tapering above 80% state of charge.
 
-### 5. Mission Control HMI and 3D Digital Twin
+### 6. Mission Control HMI and 3D Digital Twin
 * **HMI Design System:** Clean operational interface with Day and Night modes, speed and power arc gauges, and battery state-of-charge indicators.
 * **3D Digital Twin (React Three Fiber and Three.js):**
   * Wheel rotation speed synchronizes with real-time telemetry speed.
